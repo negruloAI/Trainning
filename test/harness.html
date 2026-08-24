@@ -1,0 +1,228 @@
+﻿<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><title>Test harness Mi Entrenamiento</title></head>
+<body>
+  <div id="result">corriendo...</div>
+  <header id="app-header">
+    <h1 id="header-title">Mi Entrenamiento</h1>
+    <button id="btn-sync" class="icon-btn"><span id="sync-dot" class="sync-dot"></span></button>
+  </header>
+  <main id="view"></main>
+  <div id="toast" class="toast"></div>
+
+  <script>
+    // ===== Captura de errores ANTES de cargar la app =====
+    window.__errores = [];
+    window.onerror = function (msg, src, line, col, err) {
+      window.__errores.push(msg + " @" + (src || "?").split("/").pop() + ":" + line);
+      const el = document.getElementById("result");
+      if (el && el.textContent === "corriendo...") el.textContent = "ERROR GLOBAL: " + msg;
+      return false;
+    };
+    window.addEventListener("unhandledrejection", function (e) {
+      window.__errores.push("PROMESA: " + (e.reason && e.reason.message ? e.reason.message : String(e.reason)));
+      const el = document.getElementById("result");
+      if (el && el.textContent === "corriendo...") el.textContent = "PROMESA: " + window.__errores.join(" | ");
+    });
+  </script>
+
+  <script>
+    // ===== Mock de IndexedDB en memoria (síncrono: handlers se ejecutan al asignarse) =====
+    // OJO: window.indexedDB es un getter del proto → hay que sombrearlo con defineProperty
+    (function () {
+      const stores = { comidas: new Map(), entrenos: new Map() };
+      const clone = (o) => JSON.parse(JSON.stringify(o));
+      function syncReq(result) {
+        const r = { result, error: null };
+        Object.defineProperty(r, "onsuccess", {
+          set(fn) { this._fn = fn; if (fn) { try { fn(); } catch (e) { this.error = e; } } },
+          get() { return this._fn; },
+        });
+        Object.defineProperty(r, "onerror", {
+          set(fn) { this._efn = fn; },
+          get() { return this._efn; },
+        });
+        return r;
+      }
+      const store = (name) => ({
+        put(item) { stores[name].set(item.id, clone(item)); return syncReq(item.id); },
+        get(id) { const v = stores[name].get(id); return syncReq(v ? clone(v) : undefined); },
+        getAll() { return syncReq(Array.from(stores[name].values()).map(clone)); },
+        delete(id) { stores[name].delete(id); return syncReq(undefined); },
+        clear() { stores[name].clear(); return syncReq(undefined); },
+        count() { return syncReq(stores[name].size); },
+      });
+      function syncTrans() {
+        const t = { oncomplete: null, onerror: null, onabort: null, error: null };
+        Object.defineProperty(t, "oncomplete", {
+          set(fn) { this._fn = fn; if (fn) { try { fn(); } catch (e) { this.error = e; } } },
+          get() { return this._fn; },
+        });
+        t.objectStore = (n) => store(n);
+        return t;
+      }
+      const mock = {
+        open() {
+          return syncReq({
+            objectStoreNames: { contains: (n) => n in stores },
+            transaction() { return syncTrans(); },
+          });
+        },
+      };
+      try {
+        Object.defineProperty(window, "indexedDB", { value: mock, configurable: true, writable: true });
+      } catch (e) {
+        window.__errores = window.__errores || [];
+        window.__errores.push("no se pudo mockear indexedDB: " + e.message);
+      }
+    })();
+
+    // ===== Mock de fetch para probar /sync =====
+    window.fetch = function (url, opts) {
+      const body = JSON.parse(opts.body);
+      const resultado = {
+        comidas: body.comidas.map((c) => JSON.parse(JSON.stringify(c))),
+        entrenos: body.entrenos.map((e) => JSON.parse(JSON.stringify(e))),
+      };
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(resultado) });
+    };
+  </script>
+
+  <script src="/js/db.js"></script>
+  <script src="/js/app.js"></script>
+
+  <script>
+    // ===== Suite de pruebas =====
+    const resultados = [];
+    function check(nombre, condicion) {
+      resultados.push((condicion ? "PASS" : "FAIL") + " | " + nombre);
+    }
+    function sleep(ms) { return new Promise((res) => setTimeout(res, ms)); }
+
+    async function correr() {
+      try {
+        // 1. La app carga y renderiza "hoy"
+        await sleep(300);
+        const view = document.getElementById("view");
+        check("view renderizada (hoy)", !!view && view.innerHTML.includes("Comidas"));
+        check("stats grid presente", view.innerHTML.includes("stats-grid"));
+
+        // 2. Simular guardar comida
+        window.switchView("comida");
+        await sleep(200);
+        document.getElementById("c-texto").value = "desayuno: 2 huevos, pan, cafe";
+        document.getElementById("c-hora").value = "08:00";
+        document.getElementById("c-etiqueta").value = "desayuno";
+        window.guardarComida();
+        await sleep(300);
+        check("comida guardada en IndexedDB", (await DB.getAll("comidas")).length === 1);
+        check("comida visible en vista", document.getElementById("view").innerHTML.includes("2 huevos"));
+
+        // 3. Guardar un entreno de trote
+        window.switchView("entreno");
+        await sleep(200);
+        window.seleccionarTipo("trote");
+        await sleep(200);
+        document.getElementById("e-distancia").value = "5";
+        document.getElementById("e-tiempo").value = "30";
+        document.getElementById("e-ritmo").value = "6.0";
+        document.getElementById("e-fc").value = "140/170";
+        window.guardarEntreno();
+        await sleep(300);
+        const entrenos = await DB.getAll("entrenos");
+        check("entreno trote guardado", entrenos.length === 1 && entrenos[0].tipo === "trote");
+        check("datos trote correctos", entrenos[0].datos.distancia === "5" && entrenos[0].datos.fc === "140/170");
+
+        // 4. Guardar entreno gym con ejercicios
+        window.seleccionarTipo("gym");
+        await sleep(200);
+        const list = document.getElementById("ex-list");
+        check("lista gym iniciada con 1 ejercicio", list.children.length === 1);
+        list.children[0].querySelector(".ex-nombre").value = "Prensa";
+        list.children[0].querySelector(".ex-series").value = "3";
+        list.children[0].querySelector(".ex-reps").value = "15";
+        window.addEjercicio();
+        list.children[1].querySelector(".ex-nombre").value = "Jalon";
+        list.children[1].querySelector(".ex-series").value = "3";
+        list.children[1].querySelector(".ex-reps").value = "12";
+        window.guardarEntreno();
+        await sleep(300);
+        const entrenos2 = await DB.getAll("entrenos");
+        check("entreno gym guardado", entrenos2.length === 2);
+        const gym = entrenos2.find((e) => e.tipo === "gym");
+        check("gym con 2 ejercicios", gym && gym.datos.ejercicios.length === 2);
+
+        // 5. Vista semana muestra datos
+        window.switchView("semana");
+        await sleep(200);
+        const semana = document.getElementById("view").innerHTML;
+        check("semana muestra 2 entrenos", semana.includes("2"));
+        check("semana muestra badges", semana.includes("badge-trote") && semana.includes("badge-gym"));
+
+        // 5b. Guardar commuting (toggle ida+vuelta)
+        window.switchView("entreno");
+        await sleep(200);
+        window.seleccionarTipo("commute");
+        await sleep(200);
+        check("toggle commuting con 2 botones", document.querySelectorAll("#e-toggle button").length === 2);
+        window.toggleCommute(document.querySelector("#e-toggle button[data-leg='vuelta']"));
+        document.getElementById("e-distancia").value = "22";
+        window.guardarEntreno();
+        await sleep(300);
+        const entrenos3 = await DB.getAll("entrenos");
+        const comm = entrenos3.find((e) => e.tipo === "commute");
+        check("commuting guardado", !!comm);
+        check("commuting ida+vuelta y km", comm && comm.datos.ida && comm.datos.vuelta && comm.datos.distancia === "22");
+
+        // 5c. Borrar el entreno de trote
+        window._confirmOverride = () => true;
+        window.borrarRegistro("entrenos", entrenos3.find((e) => e.tipo === "trote").id);
+        await sleep(300);
+        const entrenos4 = await DB.getAll("entrenos");
+        check("borrado individual funciona", entrenos4.length === 2 && !entrenos4.some((e) => e.tipo === "trote"));
+
+        // 6. Sync (fetch mock) devuelve datos y marca ok
+        window.switchView("ajustes");
+        localStorage.setItem("serverIp", "127.0.0.1");
+        await sleep(200);
+        await window.syncAhora();
+        check("sync ok -> dot verde", document.getElementById("sync-dot").className.includes("ok"));
+
+        // 7. Persistencia: comidas y entrenos siguen en IndexedDB (tras borrar: 1 comida, 2 entrenos)
+        const [cc, ee] = await Promise.all([DB.getAll("comidas"), DB.getAll("entrenos")]);
+        check("persistencia comidas=1 entrenos=2", cc.length === 1 && ee.length === 2);
+
+        // 8. Exportar datos funciona (crea blob)
+        const antes = document.createElement("a").click;
+        window.exportarDatos();
+        check("exportar datos no lanza error", true);
+
+        document.getElementById("result").textContent = "RESULTADO: " + resultados.filter((r) => r.startsWith("PASS")).length + "/" + resultados.length + " PASS";
+        resultados.forEach((r) => {
+          const div = document.createElement("div");
+          div.textContent = r;
+          document.body.appendChild(div);
+        });
+      } catch (err) {
+        document.getElementById("result").textContent = "ERROR EN SUITE: " + err.message + " | " + (err.stack || "").split("\n")[1];
+        console.error(err);
+      }
+    }
+
+    // La app ya se inicializó sola con DOMContentLoaded; esperamos a que esté lista
+    (async function auto() {
+      const intentos = [];
+      for (let i = 0; i < 40; i++) {
+        try {
+          if (typeof window.switchView === "function" && document.getElementById("view").innerHTML.includes("Comidas")) {
+            await correr();
+            return;
+          }
+        } catch (e) { intentos.push(e.message); }
+        await sleep(250);
+      }
+      document.getElementById("result").textContent = "TIMEOUT: la app no inicializó. Errores: " + window.__errores.join(" | ") + " | intents: " + intentos.join(" | ");
+    })();
+  </script>
+</body>
+</html>

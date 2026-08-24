@@ -1,0 +1,12 @@
+# Datos personales de salud (se sincronizan desde el celular, no van a git)
+datos/
+*.bak
+*.tmp
+
+# Python
+__pycache__/
+*.pyc
+
+# Navegadores / test
+test/*.err
+test/dump*.html

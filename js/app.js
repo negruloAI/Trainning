@@ -1,0 +1,681 @@
+"use strict";
+
+const TIPOS_ENTRENO = {
+  "bici-cerro": { label: "Bici cerro", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
+  "bici-xco": { label: "Bici XCO", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
+  "bici-electrica": { label: "Bici eléctrica", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
+  gym: { label: "Gym", badge: "badge-gym", icon: "gym", campos: ["ejercicios"] },
+  trote: { label: "Trote", badge: "badge-trote", icon: "trote", campos: ["distancia", "tiempo", "ritmo", "fc"] },
+  futbol: { label: "Futbolito", badge: "badge-futbol", icon: "futbol", campos: ["tiempo"] },
+  commute: { label: "Commuting", badge: "badge-commute", icon: "commute", campos: [] },
+};
+
+const CAMPOS = {
+  distancia: { label: "Distancia (km)", type: "number", step: "0.1", inputmode: "decimal" },
+  desnivel: { label: "Desnivel (m)", type: "number", step: "1", inputmode: "numeric" },
+  tiempo: { label: "Tiempo (min)", type: "number", step: "1", inputmode: "numeric" },
+  ritmo: { label: "Ritmo (min/km)", type: "number", step: "0.1", inputmode: "decimal" },
+  fc: { label: "FC media / máx", type: "text", placeholder: "ej. 142 / 178", inputmode: "text" },
+};
+
+const ICONS = {
+  bici: '<path d="M5.5 20a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M18.5 20a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M9 16.5h6l-3-7h-2.5L7 13l2 3.5z"/><path d="M12 9.5h4"/>',
+  gym: '<path d="M6 4v16"/><path d="M18 4v16"/><rect x="2" y="8" width="4" height="8" rx="1"/><rect x="18" y="8" width="4" height="8" rx="1"/><line x1="10" y1="4" x2="14" y2="4"/><line x1="10" y1="20" x2="14" y2="20"/>',
+  trote: '<circle cx="13" cy="4.5" r="2"/><path d="M11 8l-2.5 4L6 11l1 2.5 3.5-.5 1.5 3 1.5 5 2.5-.5-1.5-5L11 12l1.5-2.5"/><path d="M14.5 11.5L17 10l2 3.5-2.5 1.5"/>',
+  futbol: '<circle cx="12" cy="12" r="9"/><path d="M12 7l-4.5 3 1.7 5h5.6l1.7-5L12 7z"/><path d="M12 3v4"/><path d="M12 15v6"/>',
+  commute: '<path d="M5.5 20a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M18.5 20a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M9 16.5h6l-3-7h-2.5L7 13l2 3.5z"/><path d="M5 8l4-2"/><path d="M16 10h4l1 3"/>',
+};
+
+const svgWrap = (icon) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+
+const $ = (sel, root = document) => root.querySelector(sel);
+
+let currentView = "hoy";
+let estadoSync = "ok";
+
+/* ================= Estado ================= */
+const App = {
+  comidas: [],
+  entrenos: [],
+  async loadAll() {
+    const [comidas, entrenos] = await Promise.all([
+      DB.getAll("comidas"),
+      DB.getAll("entrenos"),
+    ]);
+    this.comidas = comidas.sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora));
+    this.entrenos = entrenos.sort((a, b) => (a.fecha + (a.hora || "")).localeCompare(b.fecha + (b.hora || "")));
+  },
+  comidasDe(fecha) {
+    return this.comidas.filter((c) => c.fecha === fecha);
+  },
+  entrenosDe(fecha) {
+    return this.entrenos.filter((e) => e.fecha === fecha);
+  },
+};
+
+/* ================= Navegación ================= */
+function switchView(view) {
+  currentView = view;
+  document.querySelectorAll(".tab-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.view === view);
+  });
+  render();
+}
+
+/* ================= Render: Hoy ================= */
+function renderHoy() {
+  const hoy = todayStr();
+  const comidas = App.comidasDe(hoy);
+  const entrenos = App.entrenosDe(hoy);
+
+  const reminders = [
+    { id: "desayuno", label: "Desayuno registrado" },
+    { id: "almuerzo", label: "Almuerzo registrado" },
+    { id: "cena", label: "Cena registrada" },
+  ];
+
+  const doneIds = comidas.map((c) => c.etiqueta).filter(Boolean);
+  const remHtml = reminders
+    .map((r) => {
+      const done = doneIds.includes(r.id);
+      const icon = done
+        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
+      return `<div class="reminder ${done ? "done" : "pending"}">${icon}<span>${r.label}</span></div>`;
+    })
+    .join("");
+
+  const entrenoToday = entrenos.length
+    ? entrenos
+        .map(
+          (e) => `<div class="entry">
+            <div class="entry-main">
+              <span class="badge ${TIPOS_ENTRENO[e.tipo]?.badge || "badge-gym"}">${esc(TIPOS_ENTRENO[e.tipo]?.label || e.tipo)}</span>
+              <div class="entry-title">${esc(e.resumen || "Entrenamiento")}</div>
+            </div>
+            <div class="entry-actions">
+              <div class="entry-time">${e.hora || ""}</div>
+              <button class="entry-del" onclick="borrarRegistro('entrenos','${e.id}')" title="Borrar" aria-label="Borrar">✕</button>
+            </div>
+          </div>`
+        )
+        .join("")
+    : '<div class="empty">Sin entrenamiento registrado hoy.<br>¡La bici al trabajo también cuenta!</div>';
+
+  const foodHtml = comidas.length
+    ? comidas
+        .map(
+          (c) => `<div class="entry">
+            <div class="entry-main"><div class="entry-title">${esc(c.texto)}</div></div>
+            <div class="entry-actions">
+              <div class="entry-time">${c.hora || ""}</div>
+              <button class="entry-del" onclick="borrarRegistro('comidas','${c.id}')" title="Borrar" aria-label="Borrar">✕</button>
+            </div>
+          </div>`
+        )
+        .join("")
+    : '<div class="empty">Nada registrado hoy todavía.</div>';
+
+  $("#view").innerHTML = `
+    <div class="view-section">
+      <div class="stats-grid">
+        <div class="stat"><div class="num">${comidas.length}</div><div class="lbl">Comidas</div></div>
+        <div class="stat"><div class="num">${entrenos.length}</div><div class="lbl">Entrenos</div></div>
+        <div class="stat"><div class="num">${kmBiciHoy(entrenos)}</div><div class="lbl">Km bici</div></div>
+      </div>
+      <div class="card">
+        <h3>Hoy · ${fmtFecha(hoy)}</h3>
+        ${remHtml}
+      </div>
+      <div class="card">
+        <div class="card-title-row"><h3>Comidas</h3><button class="btn btn-sm btn-secondary" onclick="goComida()">+ Añadir</button></div>
+        ${foodHtml}
+      </div>
+      <div class="card">
+        <div class="card-title-row"><h3>Entrenamientos</h3><button class="btn btn-sm btn-secondary" onclick="goEntreno()">+ Añadir</button></div>
+        ${entrenoToday}
+      </div>
+      ${entrenos.length ? '<div class="card"><button class="btn btn-secondary" onclick="switchView(\'semana\')">Ver mi semana</button></div>' : ""}
+    </div>`;
+}
+
+function kmBiciHoy(entrenos) {
+  const tipos = ["bici-cerro", "bici-xco", "bici-electrica", "commute"];
+  const total = entrenos
+    .filter((e) => tipos.includes(e.tipo))
+    .reduce((s, e) => s + parseFloat(e.datos?.distancia || 0), 0);
+  return total ? total.toFixed(1) : "0";
+}
+
+/* ================= Render: Comida ================= */
+function renderComida() {
+  const hoy = todayStr();
+  const lista = App.comidasDe(hoy);
+  const items = lista
+    .map(
+      (c) => `<div class="entry">
+        <div class="entry-main">
+          <div class="entry-title">${esc(c.texto)}</div>
+          ${c.notas ? `<div class="entry-meta">${esc(c.notas)}</div>` : ""}
+        </div>
+        <div class="entry-actions">
+          <div class="entry-time">${c.hora || ""}</div>
+          <button class="entry-del" onclick="borrarRegistro('comidas','${c.id}')" title="Borrar" aria-label="Borrar">✕</button>
+        </div>
+      </div>`
+    )
+    .join("") || '<div class="empty">Hoy no has registrado comidas.</div>';
+
+  $("#view").innerHTML = `
+    <div class="view-section">
+      <div class="card">
+        <div class="card-title-row"><h3>Nueva comida · ${fmtFecha(hoy)}</h3></div>
+        <div class="form-group">
+          <label>¿Qué comiste? <span style="color:var(--text-dim)">(desayuno, almuerzo, colación, cena)</span></label>
+          <textarea id="c-texto" placeholder="ej. almuerzo: pollo al horno, arroz, ensalada + un jugo natural"></textarea>
+        </div>
+        <div class="form-group">
+          <label>Etiqueta (para recordatorios)</label>
+          <select id="c-etiqueta">
+            <option value="">— ninguna —</option>
+            <option value="desayuno">Desayuno</option>
+            <option value="almuerzo">Almuerzo</option>
+            <option value="cena">Cena</option>
+            <option value="colacion">Colación</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Hora</label><input type="time" id="c-hora" value="${horaActual()}"></div>
+          <div class="form-group"><label>Notas (opcional)</label><input type="text" id="c-notas" placeholder="porción, extras..."></div>
+        </div>
+        <button class="btn" onclick="guardarComida()">Guardar comida</button>
+      </div>
+      <div class="card">
+        <div class="card-title-row"><h3>Comidas de hoy</h3></div>
+        <div class="entry-list">${items}</div>
+      </div>
+    </div>`;
+}
+
+async function guardarComida() {
+  if (window._guardando) return;
+  const texto = $("#c-texto").value.trim();
+  if (!texto) return toast("Escribe qué comiste", true);
+  window._guardando = true;
+  try {
+    const item = {
+      id: uid(),
+      fecha: todayStr(),
+      hora: $("#c-hora").value || horaActual(),
+      texto,
+      etiqueta: $("#c-etiqueta").value,
+      notas: $("#c-notas").value.trim(),
+      sync: false,
+    };
+    await DB.add("comidas", item);
+    App.comidas.push(item);
+    App.comidas.sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora));
+    toast("Comida guardada ✓", false, true);
+    setPendienteSync();
+    renderComida();
+  } finally {
+    window._guardando = false;
+  }
+}
+
+/* ================= Render: Entrenamiento ================= */
+function renderEntreno() {
+  const tipos = Object.entries(TIPOS_ENTRENO);
+  const cards = tipos
+    .map(
+      ([k, v]) => `<div class="type-card" id="tc-${k}" onclick="seleccionarTipo('${k}')">
+        ${svgWrap(ICONS[v.icon])}<span>${v.label}</span>
+      </div>`
+    )
+    .join("");
+
+  $("#view").innerHTML = `
+    <div class="view-section">
+      <div class="card">
+        <div class="card-title-row"><h3>Nuevo entrenamiento · ${fmtFecha(todayStr())}</h3></div>
+        <div class="type-grid">${cards}</div>
+        <div id="entreno-form"></div>
+      </div>
+      <div class="card">
+        <div class="card-title-row"><h3>Mis entrenos de hoy</h3></div>
+        <div id="hoy-entrenos">${entrenosDeHoyHtml()}</div>
+      </div>
+    </div>`;
+  if (window._tipoSel) seleccionarTipo(window._tipoSel, true);
+}
+
+function entrenosDeHoyHtml() {
+  const lista = App.entrenosDe(todayStr());
+  if (!lista.length) return '<div class="empty">Aún no registras entrenamientos hoy.</div>';
+  return `<div class="entry-list">${lista.map(entryEntrenoHtml).join("")}</div>`;
+}
+
+function entryEntrenoHtml(e) {
+  const t = TIPOS_ENTRENO[e.tipo] || { label: e.tipo, badge: "badge-gym" };
+  return `<div class="entry">
+    <div class="entry-main">
+      <span class="badge ${t.badge}">${esc(t.label)}</span>
+      <div class="entry-title">${esc(e.resumen || "—")}</div>
+      ${e.notas ? `<div class="entry-meta">${esc(e.notas)}</div>` : ""}
+    </div>
+    <div class="entry-actions">
+      <div class="entry-time">${e.hora || ""}</div>
+      <button class="entry-del" onclick="borrarRegistro('entrenos','${e.id}')" title="Borrar" aria-label="Borrar">✕</button>
+    </div>
+  </div>`;
+}
+
+function seleccionarTipo(tipo, silencioso = false) {
+  window._tipoSel = tipo;
+  document.querySelectorAll(".type-card").forEach((el) => el.classList.remove("selected"));
+  const el = document.getElementById("tc-" + tipo);
+  if (el) el.classList.add("selected");
+  renderFormEntreno(tipo);
+}
+
+function renderFormEntreno(tipo) {
+  const t = TIPOS_ENTRENO[tipo];
+  const cont = $("#entreno-form");
+  if (!cont) return;
+
+  let inner = "";
+  if (tipo === "gym") {
+    inner = `
+      <div class="form-group">
+        <label>Hora</label>
+        <input type="time" id="e-hora" value="${horaActual()}">
+      </div>
+      <div class="form-group"><label>Ejercicios (nombre · series · reps)</label></div>
+      <div class="ex-list" id="ex-list"></div>
+      <button class="btn btn-secondary btn-sm" style="margin-bottom:12px" onclick="addEjercicio()">+ Añadir ejercicio</button>
+      <div class="form-group"><label>Notas (sensación, etc.)</label><input type="text" id="e-notas" placeholder="opcional"></div>
+      <button class="btn" onclick="guardarEntreno()">Guardar entrenamiento</button>`;
+  } else if (tipo === "commute") {
+    inner = `
+      <div class="form-group"><label>Hora</label><input type="time" id="e-hora" value="${horaActual()}"></div>
+      <div class="form-group"><label>Trayecto</label></div>
+      <div class="toggle" id="e-toggle">
+        <button type="button" class="active" data-leg="ida" onclick="toggleCommute(this)">🏠 → 🏢 Ida</button>
+        <button type="button" data-leg="vuelta" onclick="toggleCommute(this)">🏢 → 🏠 Vuelta</button>
+      </div>
+      <div class="form-group" style="margin-top:12px"><label>Distancia aprox. (km, opcional)</label><input type="number" id="e-distancia" step="0.1" inputmode="decimal" placeholder="22"></div>
+      <div class="form-group"><label>Notas (sensación, clima, etc.)</label><input type="text" id="e-notas" placeholder="opcional"></div>
+      <button class="btn" style="margin-top:6px" onclick="guardarEntreno()">Guardar commuting</button>`;
+  } else {
+    inner = `
+      <div class="form-group"><label>Hora</label><input type="time" id="e-hora" value="${horaActual()}"></div>
+      <div class="form-row-3">
+        ${t.campos
+          .filter((c) => CAMPOS[c])
+          .map((c) => `<div class="form-group"><label>${CAMPOS[c].label}</label><input type="${CAMPOS[c].type}" id="e-${c}" step="${CAMPOS[c].step || ""}" inputmode="${CAMPOS[c].inputmode || "text"}" placeholder="${CAMPOS[c].placeholder || ""}"></div>`)
+          .join("")}
+      </div>
+      <div class="form-group"><label>Notas (sensación, clima, etc.)</label><input type="text" id="e-notas" placeholder="opcional"></div>
+      <button class="btn" onclick="guardarEntreno()">Guardar entrenamiento</button>`;
+  }
+  cont.innerHTML = inner;
+  if (tipo === "gym") addEjercicio();
+}
+
+function addEjercicio() {
+  const list = $("#ex-list");
+  const div = document.createElement("div");
+  div.className = "ex-item";
+  div.innerHTML = `
+    <input type="text" placeholder="Ejercicio" class="ex-nombre">
+    <input type="number" placeholder="Series" class="ex-series" inputmode="numeric">
+    <input type="number" placeholder="Reps" class="ex-reps" inputmode="numeric">
+    <button class="ex-del" onclick="this.parentElement.remove()">✕</button>`;
+  list.appendChild(div);
+  list.lastElementChild.querySelector("input").focus();
+}
+
+function toggleCommute(btn) {
+  btn.classList.toggle("active");
+}
+
+async function guardarEntreno() {
+  if (window._guardando) return;
+  const tipo = window._tipoSel;
+  if (!tipo) return toast("Elige el tipo de entrenamiento", true);
+  const t = TIPOS_ENTRENO[tipo];
+  const hora = $("#e-hora")?.value || horaActual();
+  const datos = {};
+  let resumen = "";
+
+  if (tipo === "gym") {
+    const ejercicios = [];
+    document.querySelectorAll(".ex-item").forEach((row) => {
+      const nombre = row.querySelector(".ex-nombre").value.trim();
+      const series = row.querySelector(".ex-series").value.trim();
+      const reps = row.querySelector(".ex-reps").value.trim();
+      if (nombre) ejercicios.push({ nombre, series, reps });
+    });
+    if (!ejercicios.length) return toast("Añade al menos un ejercicio", true);
+    datos.ejercicios = ejercicios;
+    resumen = `${ejercicios.length} ejercicio${ejercicios.length > 1 ? "s" : ""} · ${ejercicios.map((e) => e.nombre.split(" ")[0]).slice(0, 3).join(", ")}`;
+  } else if (tipo === "commute") {
+    const legs = Array.from(document.querySelectorAll("#e-toggle button.active")).map((b) => b.dataset.leg);
+    if (!legs.length) return toast("Marca al menos ida o vuelta", true);
+    datos.ida = legs.includes("ida");
+    datos.vuelta = legs.includes("vuelta");
+    const dist = $("#e-distancia")?.value.trim();
+    if (dist) datos.distancia = dist;
+    resumen = (datos.ida ? "Ida" : "") + (datos.ida && datos.vuelta ? " + " : "") + (datos.vuelta ? "Vuelta" : "") + (dist ? ` · ${dist} km` : "");
+  } else {
+    const orden = { distancia: "km", desnivel: "m d+", tiempo: "min", ritmo: "/km", fc: "" };
+    const partes = [];
+    for (const c of t.campos) {
+      const val = $("#e-" + c)?.value.trim();
+      if (val) {
+        datos[c] = val;
+        partes.push(`${val} ${orden[c] || ""}`.trim());
+      }
+    }
+    resumen = partes.join(" · ");
+  }
+
+  window._guardando = true;
+  try {
+    const item = {
+      id: uid(),
+      fecha: todayStr(),
+      hora,
+      tipo,
+      datos,
+      resumen,
+      notas: $("#e-notas")?.value.trim() || "",
+      sync: false,
+    };
+
+    await DB.add("entrenos", item);
+    App.entrenos.push(item);
+    App.entrenos.sort((a, b) => (a.fecha + (a.hora || "")).localeCompare(b.fecha + (b.hora || "")));
+    toast(`${t.label} guardado ✓`, false, true);
+    setPendienteSync();
+    window._tipoSel = null;
+    renderEntreno();
+  } finally {
+    window._guardando = false;
+  }
+}
+
+/* ================= Render: Semana ================= */
+function renderSemana() {
+  const hoy = new Date();
+  const lunes = new Date(hoy);
+  lunes.setDate(hoy.getDate() - ((hoy.getDay() + 6) % 7));
+  const lunesStr = fmtISO(lunes);
+  const domingoStr = fmtISO(new Date(lunes.getTime() + 6 * 86400000));
+
+  const comidasSem = App.comidas.filter((c) => c.fecha >= lunesStr && c.fecha <= domingoStr);
+  const entrenosSem = App.entrenos.filter((e) => e.fecha >= lunesStr && e.fecha <= domingoStr);
+
+  const kmBici = entrenosSem
+    .filter((e) => ["bici-cerro", "bici-xco", "bici-electrica", "commute"].includes(e.tipo))
+    .reduce((s, e) => s + parseFloat(e.datos?.distancia || 0), 0);
+  const minutos = entrenosSem.reduce((s, e) => s + parseFloat(e.datos?.tiempo || 0), 0);
+  const desnivel = entrenosSem
+    .filter((e) => ["bici-cerro", "bici-xco"].includes(e.tipo))
+    .reduce((s, e) => s + parseFloat(e.datos?.desnivel || 0), 0);
+  const diasEntreno = new Set(entrenosSem.map((e) => e.fecha)).size;
+
+  const dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
+  const filas = Array.from({ length: 7 }, (_, i) => {
+    const fecha = fmtISO(new Date(lunes.getTime() + i * 86400000));
+    const en = entrenosSem.filter((e) => e.fecha === fecha);
+    const co = comidasSem.filter((c) => c.fecha === fecha);
+    const marcadores = en.map((e) => `<span class="badge ${TIPOS_ENTRENO[e.tipo]?.badge || "badge-gym"}" style="margin:2px 2px 0 0">${esc(TIPOS_ENTRENO[e.tipo]?.label || e.tipo)}</span>`).join("");
+    const coBadge = co.length ? `<span class="badge" style="background:rgba(34,197,94,0.15);color:#4ade80;margin:2px 2px 0 0">${co.length} comida${co.length > 1 ? "s" : ""}</span>` : "";
+    return `<div class="entry">
+      <div class="entry-main">
+        <div class="entry-title" style="text-transform:capitalize">${dias[i]} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">${fmtFecha(fecha)}</span></div>
+        <div>${marcadores}${coBadge}</div>
+      </div>
+    </div>`;
+  }).join("");
+
+  $("#view").innerHTML = `
+    <div class="view-section">
+      <div class="stats-grid">
+        <div class="stat"><div class="num">${entrenosSem.length}</div><div class="lbl">Entrenos</div></div>
+        <div class="stat"><div class="num">${kmBici.toFixed(1)}</div><div class="lbl">Km bici</div></div>
+        <div class="stat"><div class="num">${Math.round(minutos)}</div><div class="lbl">Min</div></div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat"><div class="num">${desnivel.toFixed(0)}</div><div class="lbl">m d+ bici</div></div>
+        <div class="stat"><div class="num">${diasEntreno}</div><div class="lbl">Días</div></div>
+        <div class="stat"><div class="num">${comidasSem.length}</div><div class="lbl">Comidas</div></div>
+      </div>
+      <div class="card">
+        <div class="card-title-row"><h3>Semana del ${fmtFecha(lunesStr)} al ${fmtFecha(domingoStr)}</h3></div>
+        <div class="entry-list">${filas}</div>
+      </div>
+    </div>`;
+}
+
+/* ================= Render: Ajustes ================= */
+function renderAjustes() {
+  const serverIp = localStorage.getItem("serverIp") || "";
+  const estado = estadoSync === "pending"
+    ? '<span style="color:var(--warn)">● hay datos sin sincronizar</span>'
+    : estadoSync === "error"
+      ? '<span style="color:var(--danger)">● sincronización falló</span>'
+      : '<span style="color:var(--accent)">● sincronizado</span>';
+
+  $("#view").innerHTML = `
+    <div class="view-section">
+      <div class="card">
+        <h3>Servidor (PC)</h3>
+        <div class="form-group">
+          <label>IP del servidor (ej. 192.168.1.10)</label>
+          <div class="form-row">
+            <input type="text" id="server-ip" value="${esc(serverIp)}" placeholder="IP del PC">
+            <button class="btn btn-sm" onclick="guardarIp()" style="height:auto">Guardar</button>
+          </div>
+        </div>
+        <div class="ajuste-row"><div><div class="aj-lbl">Estado</div><div class="aj-desc">${estado}</div></div></div>
+        <button class="btn" onclick="syncAhora()">Sincronizar ahora</button>
+      </div>
+      <div class="card">
+        <h3>Datos</h3>
+        <div class="ajuste-row">
+          <div><div class="aj-lbl">Registros</div><div class="aj-desc" id="aj-counts">calculando…</div></div>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-secondary" onclick="exportarDatos()">Exportar JSON</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Zona de riesgo</h3>
+        <div class="ajuste-row">
+          <div><div class="aj-lbl">Borrar todo</div><div class="aj-desc">Elimina comidas y entrenos del dispositivo</div></div>
+        </div>
+        <button class="btn btn-danger" onclick="borrarTodo()">Borrar todos los datos</button>
+      </div>
+    </div>`;
+
+  DB.counts().then(({ comidas, entrenos }) => {
+    const el = $("#aj-counts");
+    if (el) el.textContent = `${comidas} comidas · ${entrenos} entrenos`;
+  });
+}
+
+function guardarIp() {
+  localStorage.setItem("serverIp", $("#server-ip").value.trim());
+  toast("IP guardada ✓", false, true);
+}
+
+async function exportarDatos() {
+  const blob = new Blob(
+    [JSON.stringify({ comidas: App.comidas, entrenos: App.entrenos }, null, 2)],
+    { type: "application/json" }
+  );
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "mi-entrenamiento-export.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Exportado ✓", false, true);
+}
+
+async function borrarTodo() {
+  if (!confirm("¿Seguro? Se borrará TODO del dispositivo. (Los datos del PC sobreviven a la siguiente sync.)")) return;
+  await DB.clear("comidas");
+  await DB.clear("entrenos");
+  App.comidas = [];
+  App.entrenos = [];
+  toast("Datos borrados", false, true);
+  setPendienteSync();
+  render();
+}
+
+/* ================= Borrado de registros ================= */
+async function borrarRegistro(store, id) {
+  const ok = window._confirmOverride ? window._confirmOverride() : confirm("¿Borrar este registro?");
+  if (!ok) return;
+  await DB.remove(store, id);
+  App[store] = App[store].filter((r) => r.id !== id);
+  toast("Registro borrado", false, true);
+  setPendienteSync();
+  render();
+}
+
+/* ================= Sincronización ================= */
+function setPendienteSync() {
+  estadoSync = "pending";
+  actualizarDot();
+}
+
+function actualizarDot() {
+  const dot = $("#sync-dot");
+  if (!dot) return;
+  dot.className = "sync-dot " + estadoSync;
+}
+
+async function syncAhora() {
+  const serverIp = (localStorage.getItem("serverIp") || "").trim();
+  if (!serverIp) return toast("Configura la IP del servidor en Ajustes", true);
+
+  const btn = $("#btn-sync");
+  btn.classList.add("spinning");
+  estadoSync = "pending";
+  actualizarDot();
+
+  try {
+    const url = `http://${serverIp}:8787/sync`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        comidas: App.comidas,
+        entrenos: App.entrenos,
+      }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+
+    // El servidor devuelve los datos consolidados → los guardamos de vuelta
+    if (data.comidas) {
+      await DB.putAll("comidas", data.comidas);
+      App.comidas = data.comidas;
+    }
+    if (data.entrenos) {
+      await DB.putAll("entrenos", data.entrenos);
+      App.entrenos = data.entrenos;
+    }
+
+    estadoSync = "ok";
+    toast("Sincronizado ✓", false, true);
+  } catch (err) {
+    estadoSync = "error";
+    toast("No se pudo sincronizar: " + err.message, true);
+  } finally {
+    btn.classList.remove("spinning");
+    actualizarDot();
+    render();
+  }
+}
+
+/* ================= Utilidades ================= */
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function horaActual() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function fmtFecha(iso) {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function fmtISO(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+let toastTimer = null;
+function toast(msg, error = false, ok = false) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.className = "toast show " + (error ? "error" : ok ? "ok" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.className = "toast"), 2600);
+}
+
+/* ================= Helpers globales para onclick ================= */
+window.switchView = switchView;
+window.goComida = () => switchView("comida");
+window.goEntreno = () => switchView("entreno");
+window.seleccionarTipo = seleccionarTipo;
+window.addEjercicio = addEjercicio;
+window.toggleCommute = toggleCommute;
+window.guardarComida = guardarComida;
+window.guardarEntreno = guardarEntreno;
+window.borrarRegistro = borrarRegistro;
+window.syncAhora = syncAhora;
+window.guardarIp = guardarIp;
+window.exportarDatos = exportarDatos;
+window.borrarTodo = borrarTodo;
+
+/* ================= Main ================= */
+async function render() {
+  switch (currentView) {
+    case "hoy": renderHoy(); break;
+    case "comida": renderComida(); break;
+    case "entreno": renderEntreno(); break;
+    case "semana": renderSemana(); break;
+    case "ajustes": renderAjustes(); break;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  document.querySelectorAll(".tab-btn").forEach((b) =>
+    b.addEventListener("click", () => switchView(b.dataset.view))
+  );
+  $("#btn-sync").addEventListener("click", syncAhora);
+  await App.loadAll();
+  actualizarDot();
+
+  // Detección de red para auto-sync
+  window.addEventListener("online", () => {
+    if (localStorage.getItem("serverIp")) syncAhora();
+  });
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
+
+  render();
+});
