@@ -253,6 +253,46 @@
         const hoyConClave = document.getElementById("view").innerHTML;
         check("boton estimar faltantes", hoyConClave.includes("Estimar macros faltantes"));
 
+        // 19. Importar JSON: fusionar (modo=false -> añadir sin borrar)
+        window._confirmOverride = () => false;
+        const jsonFusion = JSON.stringify({
+          comidas: [
+            { id: "imp-1", fecha: todayStr(), hora: "12:00", texto: "importada", macros: { calorias: 300, proteinas: 20, carbs: 30, grasas: 8 } },
+            { id: "m1", fecha: todayStr(), hora: "09:00", texto: "duplicado (no debe sumar)" },
+          ],
+          entrenos: [],
+        });
+        const archivoFusion = new File([jsonFusion], "fusion.json", { type: "application/json" });
+        await window.importarJson({ target: { files: [archivoFusion], value: "" } });
+        const trasFusion = await DB.getAll("comidas");
+        const idsFusion = trasFusion.map((c) => c.id);
+        check("importar fusiona sin duplicar", idsFusion.includes("imp-1") && idsFusion.filter((i) => i === "m1").length === 1);
+
+        // 20. Importar JSON: reemplazar (modo=true -> borra y carga solo lo importado)
+        window._confirmOverride = () => true;
+        const jsonReemplazo = JSON.stringify({
+          comidas: [{ id: "r1", fecha: todayStr(), hora: "08:00", texto: "reemplazo" }],
+          entrenos: [{ id: "re1", fecha: todayStr(), hora: "18:00", tipo: "trote", datos: { distancia: "5" }, resumen: "trote" }],
+        });
+        const archivoReemplazo = new File([jsonReemplazo], "reemplazo.json", { type: "application/json" });
+        await window.importarJson({ target: { files: [archivoReemplazo], value: "" } });
+        const [cc2, ee2] = await Promise.all([DB.getAll("comidas"), DB.getAll("entrenos")]);
+        check("importar reemplaza comidas", cc2.length === 1 && cc2[0].id === "r1");
+        check("importar reemplaza entrenos", ee2.length === 1 && ee2[0].id === "re1");
+
+        // 21. Importar JSON inválido -> error amigable
+        window.switchView("ajustes");
+        await sleep(100);
+        await window.importarJson({ target: { files: [new File(["no soy json"], "malo.json", { type: "application/json" })], value: "" } });
+        const estadoImp = document.getElementById("importar-estado");
+        check("importar json invalido avisa", estadoImp && estadoImp.innerHTML.length > 0);
+
+        // 22. Vista Ajustes muestra boton importar
+        window.switchView("ajustes");
+        await sleep(200);
+        const ajustesHtml = document.getElementById("view").innerHTML;
+        check("ajustes tiene boton importar", ajustesHtml.includes("Importar JSON"));
+
         document.getElementById("result").textContent = "RESULTADO: " + resultados.filter((r) => r.startsWith("PASS")).length + "/" + resultados.length + " PASS";
         resultados.forEach((r) => {
           const div = document.createElement("div");

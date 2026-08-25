@@ -1,6 +1,6 @@
 ﻿"use strict";
 
-const APP_VERSION = "1.5.4";
+const APP_VERSION = "1.5.5";
 
 const TIPOS_ENTRENO = {
   "bici-cerro": { label: "Bici cerro", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
@@ -813,6 +813,11 @@ function renderAjustes() {
           <button class="btn btn-secondary" onclick="exportarSemana()">Exportar semana</button>
           <button class="btn btn-secondary" onclick="exportarDatos()">Exportar todo</button>
         </div>
+        <div class="btn-group" style="margin-top:10px">
+          <button class="btn btn-secondary" onclick="document.getElementById('importar-file').click()">⬆️ Importar JSON</button>
+        </div>
+        <input type="file" id="importar-file" accept=".json,application/json" style="display:none" onchange="importarJson(event)">
+        <div id="importar-estado" style="margin-top:8px"></div>
       </div>
       <div class="card">
         <h3>Zona de riesgo</h3>
@@ -924,6 +929,74 @@ function descargarJSON(nombre, datos) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   a.remove();
+}
+
+/* ================= Importación de JSON ================= */
+function leerArchivo(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
+async function importarJson(event) {
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  const estado = $("#importar-estado");
+  const limpiar = () => { if (event.target) event.target.value = ""; };
+
+  try {
+    const contenido = await leerArchivo(file);
+    const datos = JSON.parse(contenido);
+
+    // Acepta el formato de exportarSemana (con "semana") y exportarDatos ({comidas, entrenos})
+    let comidas = Array.isArray(datos.comidas) ? datos.comidas : [];
+    let entrenos = Array.isArray(datos.entrenos) ? datos.entrenos : [];
+    if (datos.semana && Array.isArray(datos.comidas)) comidas = datos.comidas;
+
+    if (!comidas.length && !entrenos.length) {
+      if (estado) estado.innerHTML = '<span style="color:var(--danger)">El archivo no tiene comidas ni entrenos.</span>';
+      return limpiar();
+    }
+
+    const modo = window._confirmOverride
+      ? window._confirmOverride()
+      : confirm(`El archivo tiene ${comidas.length} comidas y ${entrenos.length} entrenos. ¿Reemplazar todo? (Cancelar = añadir sin borrar)`);
+
+    if (modo) {
+      // Reemplazar
+      await DB.clear("comidas");
+      await DB.clear("entrenos");
+      await Promise.all([
+        comidas.length ? DB.putAll("comidas", comidas) : Promise.resolve(),
+        entrenos.length ? DB.putAll("entrenos", entrenos) : Promise.resolve(),
+      ]);
+    } else {
+      // Fusionar por id (no duplica; el existente gana)
+      const existentes = await DB.getAll("comidas");
+      const idsExistentes = new Set(existentes.map((c) => c.id));
+      const nuevasComidas = comidas.filter((c) => !idsExistentes.has(c.id));
+      const existentesE = await DB.getAll("entrenos");
+      const idsExistentesE = new Set(existentesE.map((e) => e.id));
+      const nuevosEntrenos = entrenos.filter((e) => !idsExistentesE.has(e.id));
+      await Promise.all([
+        nuevasComidas.length ? DB.putAll("comidas", nuevasComidas) : Promise.resolve(),
+        nuevosEntrenos.length ? DB.putAll("entrenos", nuevosEntrenos) : Promise.resolve(),
+      ]);
+      if (estado) estado.innerHTML = `<span style="color:var(--accent)">✓ Añadidas ${nuevasComidas.length} comidas y ${nuevosEntrenos.length} entrenos nuevos.</span>`;
+    }
+
+    await App.loadAll();
+    setPendienteSync();
+    toast(modo ? "Datos reemplazados ✓" : "Datos añadidos ✓", false, true);
+    render();
+  } catch (err) {
+    if (estado) estado.innerHTML = `<span style="color:var(--danger)">Error: ${esc(err.message || err)} — ¿es un JSON válido exportado por la app?</span>`;
+  } finally {
+    limpiar();
+  }
 }
 
 async function borrarTodo() {
@@ -1059,6 +1132,7 @@ window.estimarFaltantes = estimarFaltantes;
 window.buscarActualizacion = buscarActualizacion;
 window.exportarDatos = exportarDatos;
 window.exportarSemana = exportarSemana;
+window.importarJson = importarJson;
 window.borrarTodo = borrarTodo;
 
 /* ================= Main ================= */
