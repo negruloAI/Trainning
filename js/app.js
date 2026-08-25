@@ -1,5 +1,7 @@
 "use strict";
 
+const APP_VERSION = "1.5.0";
+
 const TIPOS_ENTRENO = {
   "bici-cerro": { label: "Bici cerro", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
   "bici-xco": { label: "Bici XCO", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
@@ -738,6 +740,16 @@ function renderAjustes() {
         </div>
         <button class="btn btn-danger" onclick="borrarTodo()">Borrar todos los datos</button>
       </div>
+      <div class="card">
+        <h3>Acerca de</h3>
+        <div class="ajuste-row">
+          <div><div class="aj-lbl">Versión</div><div class="aj-desc" id="aj-version">v${APP_VERSION}</div></div>
+          <button class="btn btn-sm btn-secondary" onclick="buscarActualizacion()">Buscar actualización</button>
+        </div>
+        <div class="ajuste-row">
+          <div><div class="aj-lbl">Nueva versión</div><div class="aj-desc" id="aj-update">al día ✓</div></div>
+        </div>
+      </div>
     </div>`;
 
   DB.counts().then(({ comidas, entrenos }) => {
@@ -767,6 +779,22 @@ function guardarMetas() {
   localStorage.setItem("metas", JSON.stringify(metas));
   toast("Metas guardadas ✓", false, true);
   render();
+}
+
+async function buscarActualizacion() {
+  if (!("serviceWorker" in navigator)) return toast("Sin soporte de SW", true);
+  const reg = await navigator.serviceWorker.getRegistration();
+  if (!reg) return toast("Sin service worker registrado", true);
+  toast("Buscando actualización…", false, true);
+  reg.update()
+    .then(() => {
+      if (reg.waiting) {
+        const el = $("#aj-update");
+        if (el) el.innerHTML = '<span style="color:var(--accent)">nueva versión lista — recarga la app</span>';
+        toast("Nueva versión lista ✓", false, true);
+      }
+    })
+    .catch(() => toast("No se pudo buscar actualización", true));
 }
 
 async function exportarDatos() {
@@ -925,6 +953,7 @@ window.guardarGeminiKey = guardarGeminiKey;
 window.guardarMetas = guardarMetas;
 window.metasDiarias = metasDiarias;
 window.progresoDia = progresoDia;
+window.buscarActualizacion = buscarActualizacion;
 window.exportarDatos = exportarDatos;
 window.exportarSemana = exportarSemana;
 window.borrarTodo = borrarTodo;
@@ -941,6 +970,9 @@ async function render() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  const sub = document.getElementById("header-sub");
+  if (sub) sub.textContent = "v" + APP_VERSION;
+
   document.querySelectorAll(".tab-btn").forEach((b) =>
     b.addEventListener("click", () => switchView(b.dataset.view))
   );
@@ -954,7 +986,30 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
+    navigator.serviceWorker.register("sw.js").then((reg) => {
+      // Detectar nueva versión del SW → avisar y recargar automáticamente
+      let actualizacionAplicada = false;
+      reg.addEventListener("updatefound", () => {
+        const nuevo = reg.installing;
+        if (!nuevo) return;
+        nuevo.addEventListener("statechange", () => {
+          if (nuevo.state === "installed" && navigator.serviceWorker.controller) {
+            const el = $("#aj-update");
+            if (el) el.innerHTML = '<span style="color:var(--warn)">⚠️ nueva versión disponible — actualizando…</span>';
+            toast("Nueva versión disponible ✓", false, true);
+            nuevo.postMessage({ type: "SKIP_WAITING" });
+            actualizacionAplicada = true;
+          }
+        });
+      });
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (actualizacionAplicada) {
+          actualizacionAplicada = false;
+          toast("Actualizado ✓", false, true);
+          setTimeout(() => location.reload(), 600);
+        }
+      });
+    }).catch(() => {});
   }
 
   render();
