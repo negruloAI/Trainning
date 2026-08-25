@@ -1,6 +1,6 @@
-"use strict";
+﻿"use strict";
 
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.5.1";
 
 const TIPOS_ENTRENO = {
   "bici-cerro": { label: "Bici cerro", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
@@ -84,16 +84,22 @@ function metasDiarias() {
 }
 
 function progresoDia(fecha) {
-  const comidas = App.comidasDe(fecha).filter((c) => c.macros);
+  const todas = App.comidasDe(fecha);
+  const comidas = todas.filter((c) => c.macros);
   const sum = (k) => comidas.reduce((s, c) => s + (Number(c.macros[k]) || 0), 0);
   return {
     conMacros: comidas.length,
-    total: App.comidasDe(fecha).length,
+    total: todas.length,
+    sinMacros: todas.length - comidas.length,
     calorias: sum("calorias"),
     proteinas: sum("proteinas"),
     carbs: sum("carbs"),
     grasas: sum("grasas"),
   };
+}
+
+function tieneClaveGemini() {
+  return !!(localStorage.getItem("geminiKey") || "").trim();
 }
 
 function barraProgreso(valor, meta, label, unidad) {
@@ -110,11 +116,20 @@ function barraProgreso(valor, meta, label, unidad) {
 function cardProgresoDia(fecha) {
   const p = progresoDia(fecha);
   const metas = metasDiarias();
-  const aviso = p.total > 0 && p.conMacros < p.total
-    ? `<div class="entry-meta" style="margin-top:8px">⚠️ estimado de ${p.conMacros} de ${p.total} comidas del día</div>`
-    : p.total === 0
-      ? '<div class="empty">Registra comidas para ver tu progreso</div>'
-      : "";
+  let aviso = "";
+  if (p.total === 0) {
+    aviso = '<div class="empty">Registra comidas para ver tu progreso</div>';
+  } else if (p.sinMacros > 0) {
+    if (!tieneClaveGemini()) {
+      aviso = `<div class="entry-meta" style="margin-top:8px">⚠️ ${p.sinMacros} comida${p.sinMacros > 1 ? "s" : ""} sin macros — <b>configura tu clave de Gemini</b> en Ajustes para estimarlas automáticamente</div>`;
+    } else {
+      aviso = `
+        <div class="entry-meta" style="margin-top:8px">⚠️ ${p.sinMacros} comida${p.sinMacros > 1 ? "s" : ""} sin macros — el progreso es parcial</div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="estimarFaltantes('${fecha}')">🔍 Estimar macros faltantes</button>`;
+    }
+  } else if (p.total > 0) {
+    aviso = `<div class="entry-meta" style="margin-top:8px">✓ macros de ${p.conMacros} de ${p.total} comidas</div>`;
+  }
   return `
     <div class="card">
       <div class="card-title-row"><h3>Cuánto falta hoy · ${fmtFecha(fecha)}</h3></div>
@@ -124,6 +139,35 @@ function cardProgresoDia(fecha) {
       ${barraProgreso(p.calorias, metas.calorias, "Calorías", "kcal")}
       ${aviso}
     </div>`;
+}
+
+/* ================= Estimación de macros faltantes ================= */
+async function estimarFaltantes(fecha) {
+  if (!tieneClaveGemini()) {
+    toast("Configura tu clave de Gemini en Ajustes primero", true);
+    return;
+  }
+  const pendientes = App.comidasDe(fecha).filter((c) => !c.macros);
+  if (!pendientes.length) return toast("No hay comidas pendientes ✓", false, true);
+
+  let ok = 0;
+  for (const c of pendientes) {
+    try {
+      const macros = await estimarMacrosTexto(c.texto);
+      if (macros) {
+        c.macros = macros;
+        await DB.add("comidas", c);
+        ok++;
+      }
+    } catch (err) {
+      if (!/falta clave/.test(err.message || "")) {
+        toast(`Error con "${c.texto.slice(0, 20)}…"`, true);
+      }
+    }
+  }
+  setPendienteSync();
+  if (ok > 0) toast(`${ok} de ${pendientes.length} estimadas ✓`, false, true);
+  render();
 }
 
 /* ================= Render: Hoy ================= */
@@ -953,6 +997,8 @@ window.guardarGeminiKey = guardarGeminiKey;
 window.guardarMetas = guardarMetas;
 window.metasDiarias = metasDiarias;
 window.progresoDia = progresoDia;
+window.tieneClaveGemini = tieneClaveGemini;
+window.estimarFaltantes = estimarFaltantes;
 window.buscarActualizacion = buscarActualizacion;
 window.exportarDatos = exportarDatos;
 window.exportarSemana = exportarSemana;

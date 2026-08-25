@@ -237,7 +237,21 @@
         await sleep(200);
         const hoyHtml = document.getElementById("view").innerHTML;
         check("hoy muestra cuánto falta", hoyHtml.includes("Cuánto falta") && hoyHtml.includes("Proteína") && hoyHtml.includes("Calorías"));
-        check("hoy muestra aviso de estimado", hoyHtml.includes("estimado de 2 de 4"));
+        check("hoy muestra aviso de comidas sin macros", hoyHtml.includes("sin macros"));
+
+        // 17. sin clave de Gemini -> aviso de configurar clave
+        localStorage.removeItem("geminiKey");
+        window.switchView("hoy");
+        await sleep(200);
+        const hoySinClave = document.getElementById("view").innerHTML;
+        check("aviso sin clave gemini", hoySinClave.includes("configura tu clave de Gemini"));
+
+        // 18. con clave -> boton estimar faltantes
+        localStorage.setItem("geminiKey", "test-key");
+        window.switchView("hoy");
+        await sleep(200);
+        const hoyConClave = document.getElementById("view").innerHTML;
+        check("boton estimar faltantes", hoyConClave.includes("Estimar macros faltantes"));
 
         document.getElementById("result").textContent = "RESULTADO: " + resultados.filter((r) => r.startsWith("PASS")).length + "/" + resultados.length + " PASS";
         resultados.forEach((r) => {

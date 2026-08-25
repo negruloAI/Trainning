@@ -1,4 +1,4 @@
-const APP_VERSION = "1.5.0";
+﻿const APP_VERSION = "1.5.1";
 const CACHE = "mi-entrenamiento-" + APP_VERSION;
 const ASSETS = [
   "./",
