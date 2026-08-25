@@ -63,6 +63,67 @@ function switchView(view) {
   render();
 }
 
+/* ================= Metas diarias ================= */
+const METAS_DEFAULT = { calorias: 2200, proteinas: 165, carbs: 250, grasas: 60 };
+
+function metasDiarias() {
+  try {
+    const m = JSON.parse(localStorage.getItem("metas") || "null");
+    if (!m) return { ...METAS_DEFAULT };
+    return {
+      calorias: Number(m.calorias) || METAS_DEFAULT.calorias,
+      proteinas: Number(m.proteinas) || METAS_DEFAULT.proteinas,
+      carbs: Number(m.carbs) || METAS_DEFAULT.carbs,
+      grasas: Number(m.grasas) || METAS_DEFAULT.grasas,
+    };
+  } catch {
+    return { ...METAS_DEFAULT };
+  }
+}
+
+function progresoDia(fecha) {
+  const comidas = App.comidasDe(fecha).filter((c) => c.macros);
+  const sum = (k) => comidas.reduce((s, c) => s + (Number(c.macros[k]) || 0), 0);
+  return {
+    conMacros: comidas.length,
+    total: App.comidasDe(fecha).length,
+    calorias: sum("calorias"),
+    proteinas: sum("proteinas"),
+    carbs: sum("carbs"),
+    grasas: sum("grasas"),
+  };
+}
+
+function barraProgreso(valor, meta, label, unidad) {
+  const pct = meta > 0 ? Math.min(100, Math.round((valor / meta) * 100)) : 0;
+  const falta = Math.max(0, Math.round(meta - valor));
+  const clase = pct >= 100 ? "done" : "warn";
+  return `
+    <div class="prog-row">
+      <div class="prog-lbl"><span>${label}</span><span>${Math.round(valor)} / ${meta} ${unidad} · falta ${falta}</span></div>
+      <div class="prog-bar"><div class="prog-fill ${clase}" style="width:${pct}%"></div></div>
+    </div>`;
+}
+
+function cardProgresoDia(fecha) {
+  const p = progresoDia(fecha);
+  const metas = metasDiarias();
+  const aviso = p.total > 0 && p.conMacros < p.total
+    ? `<div class="entry-meta" style="margin-top:8px">⚠️ estimado de ${p.conMacros} de ${p.total} comidas del día</div>`
+    : p.total === 0
+      ? '<div class="empty">Registra comidas para ver tu progreso</div>'
+      : "";
+  return `
+    <div class="card">
+      <div class="card-title-row"><h3>Cuánto falta hoy · ${fmtFecha(fecha)}</h3></div>
+      ${barraProgreso(p.proteinas, metas.proteinas, "Proteína", "g")}
+      ${barraProgreso(p.carbs, metas.carbs, "Carbs", "g")}
+      ${barraProgreso(p.grasas, metas.grasas, "Grasas", "g")}
+      ${barraProgreso(p.calorias, metas.calorias, "Calorías", "kcal")}
+      ${aviso}
+    </div>`;
+}
+
 /* ================= Render: Hoy ================= */
 function renderHoy() {
   const hoy = todayStr();
@@ -128,6 +189,7 @@ function renderHoy() {
         <h3>Hoy · ${fmtFecha(hoy)}</h3>
         ${remHtml}
       </div>
+      ${cardProgresoDia(hoy)}
       <div class="card">
         <div class="card-title-row"><h3>Comidas</h3><button class="btn btn-sm btn-secondary" onclick="goComida()">+ Añadir</button></div>
         ${foodHtml}
@@ -229,13 +291,36 @@ async function guardarComida() {
     toast("Comida guardada ✓", false, true);
     setPendienteSync();
     renderComida();
+    // Estimar macros por texto si no vinieron de la foto (async, no bloquea)
+    if (!macros) estimarMacrosTextoYActualizar(item);
   } finally {
     window._guardando = false;
   }
 }
 
+async function estimarMacrosTextoYActualizar(item) {
+  try {
+    const macros = await estimarMacrosTexto(item.texto);
+    if (!macros) return;
+    item.macros = macros;
+    await DB.add("comidas", item);
+    const i = App.comidas.findIndex((c) => c.id === item.id);
+    if (i >= 0) App.comidas[i].macros = macros;
+    toast("Macros estimados ✓", false, true);
+    setPendienteSync();
+    render();
+  } catch (err) {
+    if (!/falta clave/.test(err.message || "")) {
+      toast("No se pudieron estimar macros", true);
+    }
+  }
+}
+
 /* ================= Reconocimiento de comida (Gemini) ================= */
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+
+const PROMPT_MACROS =
+  'Responde SOLO en JSON válido, sin markdown ni texto extra, con esta estructura exacta: {"alimentos": ["..."], "calorias": 0, "proteinas": 0, "carbs": 0, "grasas": 0}. Las unidades: calorias en kcal, proteinas/carbs/grasas en gramos. Usa números (no strings). Si no puedes estimar, usa 0.';
 
 function macrosBadge(m) {
   const k = m.calorias != null ? `${m.calorias} kcal` : "";
@@ -245,14 +330,29 @@ function macrosBadge(m) {
   return [k, p, c, g].filter(Boolean).join(" · ");
 }
 
+async function llamarGemini(texto, imagenB64, mimeType) {
+  const key = (localStorage.getItem("geminiKey") || "").trim();
+  if (!key) throw new Error("falta clave");
+  const parts = [{ text: texto }];
+  if (imagenB64) parts.push({ inline_data: { mime_type: mimeType || "image/jpeg", data: imagenB64 } });
+  const payload = { contents: [{ parts }] };
+
+  const res = await fetch(`${GEMINI_URL}?key=${encodeURIComponent(key)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errTxt = await res.text().catch(() => "");
+    throw new Error("Gemini: " + res.status + (errTxt ? " " + errTxt.slice(0, 200) : ""));
+  }
+  const data = await res.json();
+  return data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+}
+
 async function reconocerComida(event) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
-  const key = (localStorage.getItem("geminiKey") || "").trim();
-  if (!key) {
-    toast("Configura tu clave de Gemini en Ajustes", true);
-    return;
-  }
 
   const estado = $("#foto-estado");
   const cont = $("#foto-macros");
@@ -261,31 +361,7 @@ async function reconocerComida(event) {
 
   try {
     const base64 = await fileToBase64(file);
-    const payload = {
-      contents: [
-        {
-          parts: [
-            {
-              text: "Identifica los alimentos de esta foto y estima las porciones. Responde SOLO en JSON válido, sin markdown ni texto extra, con esta estructura exacta: {\"alimentos\": [\"...\"], \"calorias\": 0, \"proteinas\": 0, \"carbs\": 0, \"grasas\": 0}. Las unidades: calorias en kcal, proteinas/carbs/grasas en gramos. Usa números (no strings). Si no puedes estimar, usa 0.",
-            },
-            { inline_data: { mime_type: file.type || "image/jpeg", data: base64 } },
-          ],
-        },
-      ],
-    };
-
-    const res = await fetch(`${GEMINI_URL}?key=${encodeURIComponent(key)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const errTxt = await res.text().catch(() => "");
-      throw new Error("Gemini: " + res.status + (errTxt ? " " + errTxt.slice(0, 200) : ""));
-    }
-
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+    const text = await llamarGemini("Identifica los alimentos de esta foto y estima las porciones. " + PROMPT_MACROS, base64, file.type);
     const macros = parseMacros(text);
 
     if (!macros) {
@@ -303,10 +379,18 @@ async function reconocerComida(event) {
       txt.value = macros.alimentos.join(", ");
     }
   } catch (err) {
-    if (estado) estado.innerHTML = `<span style="color:var(--danger)">Error: ${esc(err.message || err)}</span>`;
+    const sinClave = /falta clave/.test(err.message || "");
+    if (estado) estado.innerHTML = sinClave
+      ? '<span style="color:var(--warn)">Configura tu clave de Gemini en Ajustes</span>'
+      : `<span style="color:var(--danger)">Error: ${esc(err.message || err)}</span>`;
   } finally {
     if (event.target) event.target.value = "";
   }
+}
+
+async function estimarMacrosTexto(texto) {
+  const text = await llamarGemini("Estima los macronutrientes de esta comida descrita: \"" + texto + "\". " + PROMPT_MACROS);
+  return parseMacros(text);
 }
 
 function fileToBase64(file) {
@@ -595,6 +679,7 @@ function renderSemana() {
 /* ================= Render: Ajustes ================= */
 function renderAjustes() {
   const serverIp = localStorage.getItem("serverIp") || "";
+  const metas = metasDiarias();
   const estado = estadoSync === "pending"
     ? '<span style="color:var(--warn)">● hay datos sin sincronizar</span>'
     : estadoSync === "error"
@@ -625,6 +710,16 @@ function renderAjustes() {
           </div>
         </div>
         <div class="ajuste-row"><div><div class="aj-lbl">Cómo obtenerla</div><div class="aj-desc">Ve a <span style="color:var(--accent)">aistudio.google.com/apikey</span> → Create API key (gratis). Se guarda solo en tu dispositivo.</div></div></div>
+      </div>
+      <div class="card">
+        <h3>Metas diarias (para el progreso)</h3>
+        <div class="form-row-3">
+          <div class="form-group"><label>Calorías (kcal)</label><input type="number" id="m-calorias" value="${metas.calorias}" inputmode="numeric"></div>
+          <div class="form-group"><label>Proteína (g)</label><input type="number" id="m-proteinas" value="${metas.proteinas}" inputmode="numeric"></div>
+          <div class="form-group"><label>Carbs (g)</label><input type="number" id="m-carbs" value="${metas.carbs}" inputmode="numeric"></div>
+        </div>
+        <div class="form-group"><label>Grasas (g)</label><input type="number" id="m-grasas" value="${metas.grasas}" inputmode="numeric"></div>
+        <button class="btn btn-secondary" onclick="guardarMetas()">Guardar metas</button>
       </div>
       <div class="card">
         <h3>Datos</h3>
@@ -660,6 +755,18 @@ function guardarGeminiKey() {
   const v = $("#gemini-key").value.trim();
   localStorage.setItem("geminiKey", v);
   toast(v ? "Clave de Gemini guardada ✓" : "Clave de Gemini borrada", false, true);
+}
+
+function guardarMetas() {
+  const metas = {
+    calorias: Number($("#m-calorias").value) || METAS_DEFAULT.calorias,
+    proteinas: Number($("#m-proteinas").value) || METAS_DEFAULT.proteinas,
+    carbs: Number($("#m-carbs").value) || METAS_DEFAULT.carbs,
+    grasas: Number($("#m-grasas").value) || METAS_DEFAULT.grasas,
+  };
+  localStorage.setItem("metas", JSON.stringify(metas));
+  toast("Metas guardadas ✓", false, true);
+  render();
 }
 
 async function exportarDatos() {
@@ -815,6 +922,9 @@ window.parseMacros = parseMacros;
 window.syncAhora = syncAhora;
 window.guardarIp = guardarIp;
 window.guardarGeminiKey = guardarGeminiKey;
+window.guardarMetas = guardarMetas;
+window.metasDiarias = metasDiarias;
+window.progresoDia = progresoDia;
 window.exportarDatos = exportarDatos;
 window.exportarSemana = exportarSemana;
 window.borrarTodo = borrarTodo;

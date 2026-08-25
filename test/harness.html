@@ -213,6 +213,32 @@
         const m4 = window.parseMacros('{"alimentos":["pan"],"calorias":"200","proteinas":"8","carbs":"30","grasas":"3"}');
         check("parseMacros numeros string", m4 && m4.calorias === 200 && m4.proteinas === 8);
 
+        // 13. metasDiarias: default 2200/165/250/60
+        localStorage.removeItem("metas");
+        const metasDef = window.metasDiarias();
+        check("metas default", metasDef.calorias === 2200 && metasDef.proteinas === 165 && metasDef.carbs === 250 && metasDef.grasas === 60);
+
+        // 14. metasDiarias: custom guardadas en localStorage
+        localStorage.setItem("metas", JSON.stringify({ calorias: 2000, proteinas: 180, carbs: 200, grasas: 50 }));
+        const metasCust = window.metasDiarias();
+        check("metas custom", metasCust.calorias === 2000 && metasCust.proteinas === 180);
+
+        // 15. progresoDia: suma macros de comidas del dia
+        await DB.add("comidas", { id: "m1", fecha: todayStr(), hora: "09:00", texto: "desayuno", macros: { calorias: 400, proteinas: 20, carbs: 50, grasas: 10 } });
+        await DB.add("comidas", { id: "m2", fecha: todayStr(), hora: "14:00", texto: "almuerzo", macros: { calorias: 600, proteinas: 40, carbs: 70, grasas: 15 } });
+        await DB.add("comidas", { id: "m3", fecha: todayStr(), hora: "20:00", texto: "cena sin macros" });
+        App.comidas = await DB.getAll("comidas");
+        const prog = window.progresoDia(todayStr());
+        check("progresoDia suma kcal", prog.calorias === 1000 && prog.proteinas === 60 && prog.carbs === 120 && prog.grasas === 25);
+        check("progresoDia cuenta conMacros/total", prog.conMacros === 2 && prog.total === 4);
+
+        // 16. Vista Hoy muestra la tarjeta de progreso
+        window.switchView("hoy");
+        await sleep(200);
+        const hoyHtml = document.getElementById("view").innerHTML;
+        check("hoy muestra cuánto falta", hoyHtml.includes("Cuánto falta") && hoyHtml.includes("Proteína") && hoyHtml.includes("Calorías"));
+        check("hoy muestra aviso de estimado", hoyHtml.includes("estimado de 2 de 4"));
+
         document.getElementById("result").textContent = "RESULTADO: " + resultados.filter((r) => r.startsWith("PASS")).length + "/" + resultados.length + " PASS";
         resultados.forEach((r) => {
           const div = document.createElement("div");
