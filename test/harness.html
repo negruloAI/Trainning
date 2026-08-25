@@ -197,6 +197,22 @@
         window.exportarDatos();
         check("exportar datos no lanza error", true);
 
+        // 9. parseMacros: JSON limpio de Gemini
+        const m1 = window.parseMacros('{"alimentos":["pollo","arroz"],"calorias":450,"proteinas":32,"carbs":55,"grasas":10}');
+        check("parseMacros JSON limpio", m1 && m1.calorias === 450 && m1.proteinas === 32 && m1.carbs === 55 && m1.grasas === 10 && m1.alimentos.length === 2);
+
+        // 10. parseMacros: con markdown/backticks alrededor
+        const m2 = window.parseMacros('```json\n{"alimentos":["ensalada"],"calorias":120,"proteinas":4,"carbs":15,"grasas":6}\n```');
+        check("parseMacros con markdown", m2 && m2.calorias === 120 && m2.alimentos[0] === "ensalada");
+
+        // 11. parseMacros: texto basura -> null
+        const m3 = window.parseMacros('no hay json aqui');
+        check("parseMacros basura -> null", m3 === null);
+
+        // 12. parseMacros: numeros como strings
+        const m4 = window.parseMacros('{"alimentos":["pan"],"calorias":"200","proteinas":"8","carbs":"30","grasas":"3"}');
+        check("parseMacros numeros string", m4 && m4.calorias === 200 && m4.proteinas === 8);
+
         document.getElementById("result").textContent = "RESULTADO: " + resultados.filter((r) => r.startsWith("PASS")).length + "/" + resultados.length + " PASS";
         resultados.forEach((r) => {
           const div = document.createElement("div");

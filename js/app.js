@@ -157,6 +157,7 @@ function renderComida() {
       (c) => `<div class="entry">
         <div class="entry-main">
           <div class="entry-title">${esc(c.texto)}</div>
+          ${c.macros ? `<div class="entry-macros">${macrosBadge(c.macros)}</div>` : ""}
           ${c.notas ? `<div class="entry-meta">${esc(c.notas)}</div>` : ""}
         </div>
         <div class="entry-actions">
@@ -189,7 +190,13 @@ function renderComida() {
           <div class="form-group"><label>Hora</label><input type="time" id="c-hora" value="${horaActual()}"></div>
           <div class="form-group"><label>Notas (opcional)</label><input type="text" id="c-notas" placeholder="porción, extras..."></div>
         </div>
-        <button class="btn" onclick="guardarComida()">Guardar comida</button>
+        <div class="form-row">
+          <button type="button" class="btn btn-secondary" onclick="document.getElementById('camara').click()">📷 Foto</button>
+          <button class="btn" onclick="guardarComida()">Guardar comida</button>
+        </div>
+        <input type="file" id="camara" accept="image/*" capture="environment" style="display:none" onchange="reconocerComida(event)">
+        <div id="foto-estado" style="margin-top:10px"></div>
+        <div id="foto-macros"></div>
       </div>
       <div class="card">
         <div class="card-title-row"><h3>Comidas de hoy</h3></div>
@@ -204,6 +211,7 @@ async function guardarComida() {
   if (!texto) return toast("Escribe qué comiste", true);
   window._guardando = true;
   try {
+    const macros = window._macrosPendientes || null;
     const item = {
       id: uid(),
       fecha: todayStr(),
@@ -213,15 +221,134 @@ async function guardarComida() {
       notas: $("#c-notas").value.trim(),
       sync: false,
     };
+    if (macros) item.macros = macros;
     await DB.add("comidas", item);
     App.comidas.push(item);
     App.comidas.sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora));
+    window._macrosPendientes = null;
     toast("Comida guardada ✓", false, true);
     setPendienteSync();
     renderComida();
   } finally {
     window._guardando = false;
   }
+}
+
+/* ================= Reconocimiento de comida (Gemini) ================= */
+const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+
+function macrosBadge(m) {
+  const k = m.calorias != null ? `${m.calorias} kcal` : "";
+  const p = m.proteinas != null ? `${m.proteinas}g prot` : "";
+  const c = m.carbs != null ? `${m.carbs}g carb` : "";
+  const g = m.grasas != null ? `${m.grasas}g grasa` : "";
+  return [k, p, c, g].filter(Boolean).join(" · ");
+}
+
+async function reconocerComida(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  const key = (localStorage.getItem("geminiKey") || "").trim();
+  if (!key) {
+    toast("Configura tu clave de Gemini en Ajustes", true);
+    return;
+  }
+
+  const estado = $("#foto-estado");
+  const cont = $("#foto-macros");
+  if (estado) estado.innerHTML = '<span style="color:var(--accent)">Analizando foto…</span>';
+  if (cont) cont.innerHTML = "";
+
+  try {
+    const base64 = await fileToBase64(file);
+    const payload = {
+      contents: [
+        {
+          parts: [
+            {
+              text: "Identifica los alimentos de esta foto y estima las porciones. Responde SOLO en JSON válido, sin markdown ni texto extra, con esta estructura exacta: {\"alimentos\": [\"...\"], \"calorias\": 0, \"proteinas\": 0, \"carbs\": 0, \"grasas\": 0}. Las unidades: calorias en kcal, proteinas/carbs/grasas en gramos. Usa números (no strings). Si no puedes estimar, usa 0.",
+            },
+            { inline_data: { mime_type: file.type || "image/jpeg", data: base64 } },
+          ],
+        },
+      ],
+    };
+
+    const res = await fetch(`${GEMINI_URL}?key=${encodeURIComponent(key)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const errTxt = await res.text().catch(() => "");
+      throw new Error("Gemini: " + res.status + (errTxt ? " " + errTxt.slice(0, 200) : ""));
+    }
+
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+    const macros = parseMacros(text);
+
+    if (!macros) {
+      if (estado) estado.innerHTML = '<span style="color:var(--warn)">No pude leer la respuesta. Intenta otra foto.</span>';
+      return;
+    }
+
+    window._macrosPendientes = macros;
+    if (estado) estado.innerHTML = '<span style="color:var(--accent)">✓ Reconocida</span>';
+    if (cont) cont.innerHTML = `<div class="macros-card">${macrosBadge(macros)}</div>`;
+
+    // Autocompletar el texto con los alimentos detectados
+    const txt = $("#c-texto");
+    if (macros.alimentos && macros.alimentos.length && txt && !txt.value.trim()) {
+      txt.value = macros.alimentos.join(", ");
+    }
+  } catch (err) {
+    if (estado) estado.innerHTML = `<span style="color:var(--danger)">Error: ${esc(err.message || err)}</span>`;
+  } finally {
+    if (event.target) event.target.value = "";
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result || "";
+      const idx = result.indexOf(",");
+      resolve(idx >= 0 ? result.slice(idx + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function parseMacros(text) {
+  if (!text) return null;
+  const limpio = text.replace(/```json|```/g, "").trim();
+  let obj;
+  try {
+    obj = JSON.parse(limpio);
+  } catch {
+    const match = limpio.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      obj = JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+  const num = (v) => {
+    const n = typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
+    return isNaN(n) ? null : Math.round(n);
+  };
+  const alimentos = Array.isArray(obj.alimentos) ? obj.alimentos.filter((a) => typeof a === "string") : [];
+  return {
+    alimentos,
+    calorias: num(obj.calorias),
+    proteinas: num(obj.proteinas),
+    carbs: num(obj.carbs),
+    grasas: num(obj.grasas),
+  };
 }
 
 /* ================= Render: Entrenamiento ================= */
@@ -489,6 +616,17 @@ function renderAjustes() {
         <button class="btn" onclick="syncAhora()">Sincronizar ahora</button>
       </div>
       <div class="card">
+        <h3>Reconocimiento de comida (Gemini)</h3>
+        <div class="form-group">
+          <label>Clave API de Gemini</label>
+          <div class="form-row">
+            <input type="password" id="gemini-key" value="${esc(localStorage.getItem("geminiKey") || "")}" placeholder="pega tu clave aquí" autocomplete="off">
+            <button class="btn btn-sm" onclick="guardarGeminiKey()" style="height:auto">Guardar</button>
+          </div>
+        </div>
+        <div class="ajuste-row"><div><div class="aj-lbl">Cómo obtenerla</div><div class="aj-desc">Ve a <span style="color:var(--accent)">aistudio.google.com/apikey</span> → Create API key (gratis). Se guarda solo en tu dispositivo.</div></div></div>
+      </div>
+      <div class="card">
         <h3>Datos</h3>
         <div class="ajuste-row">
           <div><div class="aj-lbl">Registros</div><div class="aj-desc" id="aj-counts">calculando…</div></div>
@@ -516,6 +654,12 @@ function renderAjustes() {
 function guardarIp() {
   localStorage.setItem("serverIp", $("#server-ip").value.trim());
   toast("IP guardada ✓", false, true);
+}
+
+function guardarGeminiKey() {
+  const v = $("#gemini-key").value.trim();
+  localStorage.setItem("geminiKey", v);
+  toast(v ? "Clave de Gemini guardada ✓" : "Clave de Gemini borrada", false, true);
 }
 
 async function exportarDatos() {
@@ -666,8 +810,11 @@ window.toggleCommute = toggleCommute;
 window.guardarComida = guardarComida;
 window.guardarEntreno = guardarEntreno;
 window.borrarRegistro = borrarRegistro;
+window.reconocerComida = reconocerComida;
+window.parseMacros = parseMacros;
 window.syncAhora = syncAhora;
 window.guardarIp = guardarIp;
+window.guardarGeminiKey = guardarGeminiKey;
 window.exportarDatos = exportarDatos;
 window.exportarSemana = exportarSemana;
 window.borrarTodo = borrarTodo;
