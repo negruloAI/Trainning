@@ -407,12 +407,17 @@ async function guardarEntreno() {
 }
 
 /* ================= Render: Semana ================= */
-function renderSemana() {
+function rangoSemanaActual() {
   const hoy = new Date();
   const lunes = new Date(hoy);
   lunes.setDate(hoy.getDate() - ((hoy.getDay() + 6) % 7));
-  const lunesStr = fmtISO(lunes);
-  const domingoStr = fmtISO(new Date(lunes.getTime() + 6 * 86400000));
+  const domingo = new Date(lunes);
+  domingo.setDate(lunes.getDate() + 6);
+  return { lunes, domingo, lunesStr: fmtISO(lunes), domingoStr: fmtISO(domingo) };
+}
+
+function renderSemana() {
+  const { lunes, lunesStr, domingoStr } = rangoSemanaActual();
 
   const comidasSem = App.comidas.filter((c) => c.fecha >= lunesStr && c.fecha <= domingoStr);
   const entrenosSem = App.entrenos.filter((e) => e.fecha >= lunesStr && e.fecha <= domingoStr);
@@ -489,7 +494,8 @@ function renderAjustes() {
           <div><div class="aj-lbl">Registros</div><div class="aj-desc" id="aj-counts">calculando…</div></div>
         </div>
         <div class="btn-group">
-          <button class="btn btn-secondary" onclick="exportarDatos()">Exportar JSON</button>
+          <button class="btn btn-secondary" onclick="exportarSemana()">Exportar semana</button>
+          <button class="btn btn-secondary" onclick="exportarDatos()">Exportar todo</button>
         </div>
       </div>
       <div class="card">
@@ -513,16 +519,32 @@ function guardarIp() {
 }
 
 async function exportarDatos() {
-  const blob = new Blob(
-    [JSON.stringify({ comidas: App.comidas, entrenos: App.entrenos }, null, 2)],
-    { type: "application/json" }
-  );
+  descargarJSON("mi-entrenamiento-export.json", { comidas: App.comidas, entrenos: App.entrenos });
+  toast("Exportado ✓", false, true);
+}
+
+function exportarSemana() {
+  const { lunesStr, domingoStr } = rangoSemanaActual();
+  const comidas = App.comidas.filter((c) => c.fecha >= lunesStr && c.fecha <= domingoStr);
+  const entrenos = App.entrenos.filter((e) => e.fecha >= lunesStr && e.fecha <= domingoStr);
+  const nombre = `mi-entrenamiento-semana-${lunesStr}.json`;
+  descargarJSON(nombre, {
+    semana: { inicio: lunesStr, fin: domingoStr },
+    comidas,
+    entrenos,
+  });
+  toast(`Semana ${fmtFecha(lunesStr)} exportada ✓`, false, true);
+}
+
+function descargarJSON(nombre, datos) {
+  const blob = new Blob([JSON.stringify(datos, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "mi-entrenamiento-export.json";
+  a.download = nombre;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(a.href);
-  toast("Exportado ✓", false, true);
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  a.remove();
 }
 
 async function borrarTodo() {
@@ -647,6 +669,7 @@ window.borrarRegistro = borrarRegistro;
 window.syncAhora = syncAhora;
 window.guardarIp = guardarIp;
 window.exportarDatos = exportarDatos;
+window.exportarSemana = exportarSemana;
 window.borrarTodo = borrarTodo;
 
 /* ================= Main ================= */
