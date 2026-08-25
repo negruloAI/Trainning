@@ -33,8 +33,15 @@ hacia `datos/comidas.json` y `datos/entrenos.json`.
   La clave se guarda solo en tu dispositivo (localStorage), nunca en el código.
 - En **Comida** → botón **📷 Foto** → saca la foto → la app detecta los alimentos y
   estima **calorías, proteínas, carbohidratos y grasas** (vía Gemini 1.5 Flash).
+- Al **escribir** una comida a mano también se estiman los macros automáticamente.
 - Los macros se guardan junto al registro de comida.
 - ⚠️ La foto se envía a Google para su análisis.
+
+## Progreso diario (cuánto falta)
+- En **Hoy** → tarjeta **"Cuánto falta hoy"** con barras de progreso de
+  proteína, carbs, grasas y calorías contra tus metas del día.
+- Metas diarias **configurables** en Ajustes.
+- Default según perfil: **2.200 kcal · 165 g proteína · 250 g carbs · 60 g grasas**.
 
 ## Exportar datos
 - **Ajustes → "Exportar semana"**: JSON con la semana actual (lunes a domingo).
@@ -52,4 +59,4 @@ hacia `datos/comidas.json` y `datos/entrenos.json`.
 ## Tests
 - `test/harness.html` — suite funcional con IndexedDB mockeado.
   Servir con el servidor y abrir `http://127.0.0.1:8787/test/harness.html`.
-  Resultado esperado: `RESULTADO: 22/22 PASS`.
+  Resultado esperado: `RESULTADO: 28/28 PASS`.
