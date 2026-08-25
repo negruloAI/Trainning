@@ -1,32 +1,25 @@
 # Mi Entrenamiento — PWA de registro
 
 App instalable (PWA) para registrar comidas y entrenamientos diarios.
-Los datos quedan en `datos/comidas.json` y `datos/entrenos.json` para
-que el asistente los analice.
+Los datos quedan en el navegador de cada dispositivo (IndexedDB, offline-first).
+
+**Publicada en GitHub Pages:** https://negruloai.github.io/Trainning/
 
 ## Cómo usarla
 
-### 1. Levantar el servidor (en el PC)
+### Opción A — En línea (recomendada)
+1. Abre en el celular: `https://negruloai.github.io/Trainning/`
+2. Instálala como app:
+   - **Android (Chrome):** menú ⋮ → "Agregar a pantalla de inicio" → Instalar.
+   - **iPhone (Safari):** botón compartir → "Agregar a pantalla de inicio".
+3. Tus datos quedan guardados **en tu teléfono** (funciona sin internet).
+
+### Opción B — Servidor local (para que el asistente lea los datos en el PC)
 ```
 python server.py
 ```
-Sirve la app en `http://<ip-del-pc>:8787` y recibe la sincronización.
-En la consola verás la IP local del servidor.
-
-### 2. Abrir / instalar en el celular
-- Conecta el celular a la **misma red WiFi** que el PC.
-- Abre en el navegador: `http://<ip-del-pc>:8787`
-- Desde el menú del navegador: **"Agregar a pantalla de inicio"** → se instala como app.
-
-### 3. Configurar la IP en la app
-- En la app → pestaña **Ajustes** → escribe la IP del PC (ej. `192.168.1.10`) → Guardar.
-
-### 4. Registrar y sincronizar
-- Registra comidas y entrenamientos en cualquier momento (**funciona offline**).
-- El botón de sincronizar (flecha circular arriba) envía los datos al PC.
-  - Punto **naranja** = hay datos sin sincronizar.
-  - Punto **verde** = todo sincronizado.
-  - Al recuperar la conexión se sincroniza solo.
+Sirve la app en `http://<ip-del-pc>:8787` y recibe la sincronización vía `POST /sync`
+hacia `datos/comidas.json` y `datos/entrenos.json`.
 
 ## Tipos de entrenamiento
 - **Bici cerro / XCO / eléctrica:** distancia, desnivel, tiempo, FC media/máx.
@@ -35,7 +28,20 @@ En la consola verás la IP local del servidor.
 - **Futbolito:** duración.
 - **Commuting:** un toque (ida y vuelta).
 
-## Endpoints del servidor
+## Reconocimiento de comida por foto (Gemini)
+- En **Ajustes** → pega tu **clave API de Gemini** (gratis en `aistudio.google.com/apikey`).
+  La clave se guarda solo en tu dispositivo (localStorage), nunca en el código.
+- En **Comida** → botón **📷 Foto** → saca la foto → la app detecta los alimentos y
+  estima **calorías, proteínas, carbohidratos y grasas** (vía Gemini 1.5 Flash).
+- Los macros se guardan junto al registro de comida.
+- ⚠️ La foto se envía a Google para su análisis.
+
+## Exportar datos
+- **Ajustes → "Exportar semana"**: JSON con la semana actual (lunes a domingo).
+- **Ajustes → "Exportar todo"**: JSON completo.
+- El asistente analiza el JSON exportado.
+
+## Endpoints del servidor local
 | Método | Ruta | Descripción |
 |---|---|---|
 | GET | `/` | App (index.html) |
@@ -46,4 +52,4 @@ En la consola verás la IP local del servidor.
 ## Tests
 - `test/harness.html` — suite funcional con IndexedDB mockeado.
   Servir con el servidor y abrir `http://127.0.0.1:8787/test/harness.html`.
-  Resultado esperado: `RESULTADO: 18/18 PASS`.
+  Resultado esperado: `RESULTADO: 22/22 PASS`.
