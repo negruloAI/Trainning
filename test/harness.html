@@ -293,6 +293,9 @@
         const ajustesHtml = document.getElementById("view").innerHTML;
         check("ajustes tiene boton importar", ajustesHtml.includes("Importar JSON"));
 
+        // 23. Enlace de API key es clickeable (anchor con href)
+        check("enlace apikey es anchor", ajustesHtml.includes('href="https://aistudio.google.com/apikey"') && ajustesHtml.includes("target=\"_blank\""));
+
         document.getElementById("result").textContent = "RESULTADO: " + resultados.filter((r) => r.startsWith("PASS")).length + "/" + resultados.length + " PASS";
         resultados.forEach((r) => {
           const div = document.createElement("div");

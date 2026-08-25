@@ -1,6 +1,6 @@
 ﻿"use strict";
 
-const APP_VERSION = "1.5.5";
+const APP_VERSION = "1.5.6";
 
 const TIPOS_ENTRENO = {
   "bici-cerro": { label: "Bici cerro", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
@@ -792,7 +792,7 @@ function renderAjustes() {
         </div>
         <button class="btn btn-secondary btn-sm" onclick="probarClave()" style="margin-bottom:10px">🔌 Probar clave</button>
         <div id="prueba-clave"></div>
-        <div class="ajuste-row"><div><div class="aj-lbl">Cómo obtenerla</div><div class="aj-desc">Ve a <span style="color:var(--accent)">aistudio.google.com/apikey</span> → Create API key (gratis). Se guarda solo en tu dispositivo.</div></div></div>
+        <div class="ajuste-row"><div><div class="aj-lbl">Cómo obtenerla</div><div class="aj-desc">Toca el enlace → <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline;font-weight:600">Crear API key de Gemini (gratis)</a>. Se guarda solo en tu dispositivo.</div></div></div>
       </div>
       <div class="card">
         <h3>Metas diarias (para el progreso)</h3>
