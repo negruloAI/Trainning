@@ -1,6 +1,6 @@
 ﻿"use strict";
 
-const APP_VERSION = "1.5.3";
+const APP_VERSION = "1.5.4";
 
 const TIPOS_ENTRENO = {
   "bici-cerro": { label: "Bici cerro", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
@@ -375,7 +375,7 @@ async function estimarMacrosTextoYActualizar(item) {
 }
 
 /* ================= Reconocimiento de comida (Gemini) ================= */
-const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+const GEMINI_MODELS = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
 const GEMINI_URL = (m) => `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
 
 const PROMPT_MACROS =
