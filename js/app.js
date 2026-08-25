@@ -1,6 +1,6 @@
 ﻿"use strict";
 
-const APP_VERSION = "1.5.2";
+const APP_VERSION = "1.5.3";
 
 const TIPOS_ENTRENO = {
   "bici-cerro": { label: "Bici cerro", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
@@ -375,7 +375,8 @@ async function estimarMacrosTextoYActualizar(item) {
 }
 
 /* ================= Reconocimiento de comida (Gemini) ================= */
-const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+const GEMINI_URL = (m) => `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
 
 const PROMPT_MACROS =
   'Responde SOLO en JSON válido, sin markdown ni texto extra, con esta estructura exacta: {"alimentos": ["..."], "calorias": 0, "proteinas": 0, "carbs": 0, "grasas": 0}. Las unidades: calorias en kcal, proteinas/carbs/grasas en gramos. Usa números (no strings). Si no puedes estimar, usa 0.';
@@ -395,17 +396,39 @@ async function llamarGemini(texto, imagenB64, mimeType) {
   if (imagenB64) parts.push({ inline_data: { mime_type: mimeType || "image/jpeg", data: imagenB64 } });
   const payload = { contents: [{ parts }] };
 
-  const res = await fetch(`${GEMINI_URL}?key=${encodeURIComponent(key)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const errTxt = await res.text().catch(() => "");
-    throw new Error("Gemini: " + res.status + (errTxt ? " " + errTxt.slice(0, 200) : ""));
+  let ultimoError = null;
+  for (const modelo of GEMINI_MODELS) {
+    try {
+      const res = await fetch(`${GEMINI_URL(modelo)}?key=${encodeURIComponent(key)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        let detalle = "";
+        try {
+          const j = await res.json();
+          detalle = (j?.error?.message || j?.error?.status || "").toString();
+        } catch {}
+        // 404/400 por modelo no disponible → probar el siguiente
+        if (res.status === 404 || res.status === 400) {
+          ultimoError = `Gemini ${res.status}: ${detalle || modelo}`;
+          continue;
+        }
+        throw new Error(`Gemini ${res.status}: ${detalle || "error"}`.slice(0, 200));
+      }
+      const data = await res.json();
+      const textoResp = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+      if (!textoResp && data?.promptFeedback?.blockReason) {
+        throw new Error("Contenido bloqueado por la IA (" + data.promptFeedback.blockReason + ")");
+      }
+      return textoResp;
+    } catch (err) {
+      if (/bloqueado/.test(err.message || "")) throw err;
+      ultimoError = err.message || String(err);
+    }
   }
-  const data = await res.json();
-  return data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+  throw new Error(ultimoError || "No se pudo conectar con Gemini");
 }
 
 async function reconocerComida(event) {
@@ -767,6 +790,8 @@ function renderAjustes() {
             <button class="btn btn-sm" onclick="guardarGeminiKey()" style="height:auto">Guardar</button>
           </div>
         </div>
+        <button class="btn btn-secondary btn-sm" onclick="probarClave()" style="margin-bottom:10px">🔌 Probar clave</button>
+        <div id="prueba-clave"></div>
         <div class="ajuste-row"><div><div class="aj-lbl">Cómo obtenerla</div><div class="aj-desc">Ve a <span style="color:var(--accent)">aistudio.google.com/apikey</span> → Create API key (gratis). Se guarda solo en tu dispositivo.</div></div></div>
       </div>
       <div class="card">
@@ -823,6 +848,25 @@ function guardarGeminiKey() {
   const v = $("#gemini-key").value.trim();
   localStorage.setItem("geminiKey", v);
   toast(v ? "Clave de Gemini guardada ✓" : "Clave de Gemini borrada", false, true);
+}
+
+async function probarClave() {
+  const cont = $("#prueba-clave");
+  const key = (localStorage.getItem("geminiKey") || "").trim();
+  if (!key) {
+    if (cont) cont.innerHTML = '<span style="color:var(--danger)">Primero guarda una clave.</span>';
+    return;
+  }
+  if (cont) cont.innerHTML = '<span style="color:var(--text-dim)">Probando…</span>';
+  try {
+    const textoResp = await llamarGemini('Responde solo con la palabra OK. ' + PROMPT_MACROS);
+    if (cont) cont.innerHTML = `<span style="color:var(--accent)">✓ Clave válida — Gemini respondió: ${esc(textoResp.slice(0, 60))}</span>`;
+    toast("Clave válida ✓", false, true);
+  } catch (err) {
+    const mensaje = err.message || String(err);
+    if (cont) cont.innerHTML = `<span style="color:var(--danger)">✗ ${esc(mensaje)}</span>`;
+    toast("Clave no válida", true);
+  }
 }
 
 function guardarMetas() {
@@ -1006,6 +1050,7 @@ window.parseMacros = parseMacros;
 window.syncAhora = syncAhora;
 window.guardarIp = guardarIp;
 window.guardarGeminiKey = guardarGeminiKey;
+window.probarClave = probarClave;
 window.guardarMetas = guardarMetas;
 window.metasDiarias = metasDiarias;
 window.progresoDia = progresoDia;
