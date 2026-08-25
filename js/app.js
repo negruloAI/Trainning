@@ -1,6 +1,6 @@
 ﻿"use strict";
 
-const APP_VERSION = "1.5.1";
+const APP_VERSION = "1.5.2";
 
 const TIPOS_ENTRENO = {
   "bici-cerro": { label: "Bici cerro", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
@@ -278,6 +278,7 @@ function renderComida() {
 
   $("#view").innerHTML = `
     <div class="view-section">
+      ${cardProgresoDia(hoy)}
       <div class="card">
         <div class="card-title-row"><h3>Nueva comida · ${fmtFecha(hoy)}</h3></div>
         <div class="form-group">
@@ -305,6 +306,7 @@ function renderComida() {
         <input type="file" id="camara" accept="image/*" capture="environment" style="display:none" onchange="reconocerComida(event)">
         <div id="foto-estado" style="margin-top:10px"></div>
         <div id="foto-macros"></div>
+        <div id="estado-estimacion" style="margin-top:10px"></div>
       </div>
       <div class="card">
         <div class="card-title-row"><h3>Comidas de hoy</h3></div>
@@ -345,20 +347,30 @@ async function guardarComida() {
 }
 
 async function estimarMacrosTextoYActualizar(item) {
+  const est = $("#estado-estimacion");
+  if (est) est.innerHTML = '<span style="color:var(--accent)">⏳ estimando macros…</span>';
   try {
     const macros = await estimarMacrosTexto(item.texto);
-    if (!macros) return;
+    if (!macros) {
+      if (est) est.innerHTML = '<span style="color:var(--warn)">No se pudieron estimar macros (intenta describir mejor la comida).</span>';
+      return;
+    }
     item.macros = macros;
     await DB.add("comidas", item);
     const i = App.comidas.findIndex((c) => c.id === item.id);
     if (i >= 0) App.comidas[i].macros = macros;
+    if (est) est.innerHTML = `<span style="color:var(--accent)">✓ Macros estimados: ${esc(macrosBadge(macros))}</span>`;
     toast("Macros estimados ✓", false, true);
     setPendienteSync();
     render();
   } catch (err) {
-    if (!/falta clave/.test(err.message || "")) {
-      toast("No se pudieron estimar macros", true);
+    const sinClave = /falta clave/.test(err.message || "");
+    if (est) {
+      est.innerHTML = sinClave
+        ? '<span style="color:var(--warn)">Comida guardada sin macros — <b>configura tu clave de Gemini</b> en Ajustes y luego toca "Estimar macros faltantes".</span>'
+        : `<span style="color:var(--danger)">Error estimando: ${esc(err.message || err)}</span>`;
     }
+    if (!sinClave) toast("No se pudieron estimar macros", true);
   }
 }
 
