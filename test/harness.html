@@ -296,18 +296,25 @@
         // 23. Enlace de API key es clickeable (anchor con href)
         check("enlace apikey es anchor", ajustesHtml.includes('href="https://aistudio.google.com/apikey"') && ajustesHtml.includes("target=\"_blank\""));
 
-        // 24. Parser GPX: distancia haversine + duracion + desnivel
+        // 24. Parser GPX: distancia haversine + duracion + desnivel + FC + calorias
         const gpx = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Garmin">
-<trk><name>Cerro</name><trkseg>
+<trk><name>Subida cerro</name><type>mountain_biking</type><trkseg>
 <trkpt lat="-33.456" lon="-70.650"><ele>600</ele><time>2026-08-25T08:00:00Z</time></trkpt>
 <trkpt lat="-33.456" lon="-70.649"><ele>610</ele><time>2026-08-25T08:05:00Z</time></trkpt>
 <trkpt lat="-33.455" lon="-70.648"><ele>625</ele><time>2026-08-25T08:10:00Z</time></trkpt>
-</trkseg></trk></gpx>`;
+</trkseg>
+<extensions><calories>480</calories><MaxHR>172</MaxHR><AvgHR>148</AvgHR></extensions>
+</trk></gpx>`;
         const g = window.parseGPXTexto(gpx);
         check("gpx distancia >0", g.distanciaKm > 0.1 && g.distanciaKm < 2);
         check("gpx desnivel 25m", g.desnivel === 25);
         check("gpx duracion 10min", g.duracionMin === 10);
+        check("gpx calorias 480", g.calorias === 480);
+        check("gpx fc promedio 148", g.fcPromedio === 148);
+        check("gpx fc max 172", g.fcMax === 172);
+        check("gpx tipo mountain_biking", g.tipoGPX === "mountain_biking");
+        check("gpx nombre contiene subida", g.nombre.includes("Subida"));
 
         // 25. Importar GPX agrega entreno (confirm=true -> bici)
         window._confirmOverride = () => true;
@@ -315,6 +322,8 @@
         const trasGpx = await DB.getAll("entrenos");
         const gpxEnt = trasGpx.find((e) => e.notas === "Importado de GPX");
         check("gpx importado como bici", !!gpxEnt && gpxEnt.tipo === "bici-cerro" && parseFloat(gpxEnt.datos.distancia) > 0);
+        check("gpx tiene fc promedio", !!gpxEnt && gpxEnt.datos.fc === "148 / 172");
+        check("gpx tiene calorias", !!gpxEnt && parseInt(gpxEnt.datos.calorias) === 480);
 
         // 26. Parser FIT: archivo binario sintetico minimo
         // Header FIT (14 bytes) + 1 definition (record mesg 20) + 2 data records

@@ -1,6 +1,6 @@
 ﻿"use strict";
 
-const APP_VERSION = "1.6.0";
+const APP_VERSION = "1.6.2";
 
 const TIPOS_ENTRENO = {
   "bici-cerro": { label: "Bici cerro", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
@@ -1135,12 +1135,40 @@ function haversine(lat1, lon1, lat2, lon2) {
 
 function parseGPXTexto(texto) {
   const doc = new DOMParser().parseFromString(texto, "application/xml");
-  const pts = Array.from(doc.getElementsByTagName("trkpt"));
+  const trks = Array.from(doc.getElementsByTagName("trk"));
+  const ruta = trks.length ? trks[0] : doc;
+
+  // ---- Datos del track ----
+  const nombre = ruta.getElementsByTagName("name")[0]?.textContent || "";
+  let tipoGPX = "";
+  const tipoTag = ruta.getElementsByTagName("type")[0]?.textContent;
+  if (tipoTag) tipoGPX = tipoTag;
+
+  const pts = Array.from(ruta.getElementsByTagName("trkpt"));
   if (!pts.length) throw new Error("GPX sin puntos (trkpt)");
+
   let distancia = 0;
   let elevGanancia = 0;
+  let elevPerdida = 0;
   let prev = null;
   let prevElev = null;
+
+  // Calorias (Garmin pone en <extensions><calories> por punto o en el summary)
+  let totalCalorias = 0;
+  const calEl = ruta.getElementsByTagName("calories");
+  if (calEl.length) {
+    // Algunos GPX tienen un campo <calories> en <extensions> del track
+    totalCalorias = parseInt(calEl[0]?.textContent) || 0;
+  }
+
+  // FC: maxHR, avgHR en extensions
+  let maxHR = 0;
+  let avgHR = 0;
+  const xhr = ruta.getElementsByTagName("MaxHR");
+  if (xhr.length) maxHR = parseInt(xhr[0]?.textContent) || 0;
+  const ayhr = ruta.getElementsByTagName("AvgHR");
+  if (ayhr.length) avgHR = parseInt(ayhr[0]?.textContent) || 0;
+
   for (const p of pts) {
     const lat = parseFloat(p.getAttribute("lat"));
     const lon = parseFloat(p.getAttribute("lon"));
@@ -1148,19 +1176,31 @@ function parseGPXTexto(texto) {
     if (prev) distancia += haversine(prev.lat, prev.lon, lat, lon);
     const elev = parseFloat(p.getElementsByTagName("ele")[0]?.textContent);
     if (!isNaN(elev)) {
-      if (prevElev != null && elev > prevElev) elevGanancia += elev - prevElev;
+      if (prevElev != null) {
+        const d = elev - prevElev;
+        if (d > 0) elevGanancia += d;
+        else elevPerdida += Math.abs(d);
+      }
       prevElev = elev;
     }
     prev = { lat, lon };
   }
+
   const t0 = pts[0]?.getElementsByTagName("time")[0]?.textContent;
   const t1 = pts[pts.length - 1]?.getElementsByTagName("time")[0]?.textContent;
   let duracionMin = 0;
   if (t0 && t1) duracionMin = Math.round((new Date(t1) - new Date(t0)) / 60000);
+
   return {
     distanciaKm: Math.round(distancia * 10) / 10,
     desnivel: Math.round(elevGanancia),
+    desnivelBajada: Math.round(elevPerdida),
     duracionMin: Math.max(0, duracionMin),
+    calorias: totalCalorias,
+    fcMax: maxHR,
+    fcPromedio: avgHR,
+    nombre,
+    tipoGPX,
   };
 }
 
@@ -1172,30 +1212,52 @@ async function importarGPX(event) {
     const contenido = await leerArchivo(file);
     const g = parseGPXTexto(contenido);
     if (!g.distanciaKm && !g.desnivel && !g.duracionMin) throw new Error("GPX vacío o inválido");
+
     const partes = [
       g.distanciaKm ? `${g.distanciaKm} km` : "",
       g.duracionMin ? `${g.duracionMin} min` : "",
       g.desnivel ? `${g.desnivel} m d+` : "",
+      g.fcPromedio ? `FC ${g.fcPromedio}${g.fcMax ? "/" + g.fcMax : ""}` : "",
+      g.calorias ? `${g.calorias} kcal` : "",
     ].filter(Boolean);
-    const tipo = window._confirmOverride
-      ? window._confirmOverride()
-      : confirm(`GPX: ${partes.join(" · ")}. ¿Importar como BICI? (Cancelar = como TROTE)`);
+
+    let tipo = "bici-cerro";
+    if (g.tipoGPX) {
+      const tg = g.tipoGPX.toLowerCase();
+      if (tg.includes("running") || tg.includes("run") || tg.includes("trail") || tg.includes("hik")) tipo = "trote";
+    }
+    // Si no hay tipo del GPX, preguntar
+    if (tipo === "bici-cerro") {
+      const esBici = window._confirmOverride
+        ? window._confirmOverride()
+        : confirm(`GPX: ${partes.join(" · ")}. ¿Importar como BICI? (Cancelar = como TROTE)`);
+      tipo = esBici ? "bici-cerro" : "trote";
+    } else {
+      const confirmTipo = window._confirmOverride
+        ? window._confirmOverride()
+        : confirm(`GPX detectado como "${tipo}" (${partes.join(" · ")}). ¿Confirmar? (Cancelar = TROTE)`);
+      if (!confirmTipo) tipo = "trote";
+    }
 
     const hoy = todayStr();
+    const datos = { distancia: String(g.distanciaKm), tiempo: String(g.duracionMin || ""), desnivel: String(g.desnivel || "") };
+    if (g.fcPromedio) datos.fc = g.fcMax ? `${g.fcPromedio} / ${g.fcMax}` : String(g.fcPromedio);
+    if (g.calorias) datos.calorias = String(g.calorias);
+
     const item = {
       id: uid(),
       fecha: hoy,
       hora: "",
-      tipo: tipo ? "bici-cerro" : "trote",
-      datos: { distancia: String(g.distanciaKm), tiempo: String(g.duracionMin || ""), desnivel: String(g.desnivel || "") },
-      resumen: partes.join(" · "),
+      tipo,
+      datos,
+      resumen: (g.nombre || partes.join(" · ")).slice(0, 80),
       notas: "Importado de GPX",
       sync: false,
     };
     await DB.add("entrenos", item);
     App.entrenos.push(item);
     setPendienteSync();
-    if (estado) estado.innerHTML = `<span style="color:var(--accent)">✓ GPX importado como ${item.tipo === "bici-cerro" ? "bici" : "trote"}: ${partes.join(" · ")}</span>`;
+    if (estado) estado.innerHTML = `<span style="color:var(--accent)">✓ GPX importado: ${item.resumen}</span>`;
     toast("GPX importado ✓", false, true);
     render();
   } catch (err) {
