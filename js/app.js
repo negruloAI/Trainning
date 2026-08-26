@@ -1,6 +1,6 @@
 ﻿"use strict";
 
-const APP_VERSION = "1.5.6";
+const APP_VERSION = "1.6.0";
 
 const TIPOS_ENTRENO = {
   "bici-cerro": { label: "Bici cerro", badge: "badge-bici", icon: "bici", campos: ["distancia", "desnivel", "tiempo", "fc"] },
@@ -814,9 +814,9 @@ function renderAjustes() {
           <button class="btn btn-secondary" onclick="exportarDatos()">Exportar todo</button>
         </div>
         <div class="btn-group" style="margin-top:10px">
-          <button class="btn btn-secondary" onclick="document.getElementById('importar-file').click()">⬆️ Importar JSON</button>
+          <button class="btn btn-secondary" onclick="document.getElementById('importar-file').click()">⬆️ Importar (JSON · CSV · GPX · FIT)</button>
         </div>
-        <input type="file" id="importar-file" accept=".json,application/json" style="display:none" onchange="importarJson(event)">
+        <input type="file" id="importar-file" accept=".json,.csv,.gpx,.fit,application/json,text/csv,application/gpx+xml" style="display:none" onchange="importarArchivo(event)">
         <div id="importar-estado" style="margin-top:8px"></div>
       </div>
       <div class="card">
@@ -931,7 +931,7 @@ function descargarJSON(nombre, datos) {
   a.remove();
 }
 
-/* ================= Importación de JSON ================= */
+/* ================= Importación de archivos ================= */
 function leerArchivo(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -939,6 +939,32 @@ function leerArchivo(file) {
     reader.onerror = () => reject(reader.error);
     reader.readAsText(file);
   });
+}
+
+function leerArchivoBinario(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function importarArchivo(event) {
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  const nombre = (file.name || "").toLowerCase();
+  try {
+    if (nombre.endsWith(".json")) return await importarJson(event);
+    if (nombre.endsWith(".csv")) return await importarGarminCSV(event);
+    if (nombre.endsWith(".gpx")) return await importarGPX(event);
+    if (nombre.endsWith(".fit")) return await importarFIT(event);
+    toast("Formato no soportado (usa JSON, CSV, GPX o FIT)", true);
+  } catch (err) {
+    toast("Error al importar: " + (err.message || err), true);
+  } finally {
+    if (event.target) event.target.value = "";
+  }
 }
 
 async function importarJson(event) {
@@ -996,6 +1022,311 @@ async function importarJson(event) {
     if (estado) estado.innerHTML = `<span style="color:var(--danger)">Error: ${esc(err.message || err)} — ¿es un JSON válido exportado por la app?</span>`;
   } finally {
     limpiar();
+  }
+}
+
+/* ================= Parser CSV de Garmin Connect ================= */
+function parseCSV(texto) {
+  const filas = [];
+  const lineas = texto.split(/\r?\n/).filter((l) => l.trim() !== "");
+  for (const linea of lineas) {
+    const fila = [];
+    let campo = "";
+    let entreComillas = false;
+    for (let i = 0; i < linea.length; i++) {
+      const ch = linea[i];
+      if (ch === '"') {
+        if (entreComillas && linea[i + 1] === '"') { campo += '"'; i++; }
+        else entreComillas = !entreComillas;
+      } else if (ch === "," && !entreComillas) {
+        fila.push(campo.trim()); campo = "";
+      } else {
+        campo += ch;
+      }
+    }
+    fila.push(campo.trim());
+    filas.push(fila);
+  }
+  return filas;
+}
+
+const TIPO_GARMIN = {
+  ride: "bici-cerro", cycling: "bici-cerro", bike: "bici-cerro", mountain: "bici-cerro", mtb: "bici-cerro",
+  running: "trote", run: "trote", trail: "trote", track: "trote",
+  walking: "trote", hike: "trote", hiking: "trote",
+};
+
+function mapTipoGarmin(t) {
+  const s = String(t || "").toLowerCase();
+  return TIPO_GARMIN[s] || "bici-cerro";
+}
+
+async function importarGarminCSV(event) {
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  const estado = $("#importar-estado");
+  try {
+    const contenido = await leerArchivo(file);
+    const filas = parseCSV(contenido);
+    if (filas.length < 2) throw new Error("CSV sin datos");
+    const headers = filas[0].map((h) => h.toLowerCase());
+    const idx = (nombre) => headers.findIndex((h) => h.includes(nombre));
+    const iTipo = idx("activity_type") >= 0 ? idx("activity_type") : idx("type");
+    const iFecha = idx("activity date") >= 0 ? idx("activity date") : idx("start time");
+    const iDist = idx("distance");
+    const iDur = idx("duration") >= 0 ? idx("duration") : idx("time");
+    const iHr = idx("avg hr");
+    const iHrMax = idx("max hr");
+    const iElev = idx("total elevation gain");
+    const iNombre = idx("activity name");
+
+    let nuevos = 0;
+    for (const fila of filas.slice(1)) {
+      const tipo = iTipo >= 0 ? mapTipoGarmin(fila[iTipo]) : "bici-cerro";
+      let fecha = iFecha >= 0 ? fila[iFecha] : "";
+      const hora = iFecha >= 0 && fecha.includes(" ") ? fecha.split(" ")[1] || "" : "";
+      fecha = (fecha.split(" ")[0] || "").split("T")[0];
+      if (!fecha) continue;
+
+      const datos = {};
+      if (iDist >= 0) datos.distancia = String(parseFloat(fila[iDist]) || 0).replace(/\.?0+$/, "");
+      if (iElev >= 0) datos.desnivel = String(parseFloat(fila[iElev]) || 0).replace(/\.?0+$/, "");
+      const durSeg = parsearDuracion(fila[iDur]);
+      if (durSeg > 0) datos.tiempo = String(Math.round(durSeg / 60));
+      const hr = iHr >= 0 ? parseFloat(fila[iHr]) : NaN;
+      const hrMax = iHrMax >= 0 ? parseFloat(fila[iHrMax]) : NaN;
+      if (!isNaN(hr)) datos.fc = hrMax && !isNaN(hrMax) ? `${Math.round(hr)} / ${Math.round(hrMax)}` : String(Math.round(hr));
+
+      const resumen = iNombre >= 0 && fila[iNombre] ? fila[iNombre] : "Importado de Garmin";
+      const item = { id: uid(), fecha, hora, tipo, datos, resumen, notas: "Importado desde Garmin Connect", sync: false };
+      await DB.add("entrenos", item);
+      App.entrenos.push(item);
+      nuevos++;
+    }
+    App.entrenos.sort((a, b) => (a.fecha + (a.hora || "")).localeCompare(b.fecha + (b.hora || "")));
+    setPendienteSync();
+    if (estado) estado.innerHTML = `<span style="color:var(--accent)">✓ Importados ${nuevos} entrenos de Garmin.</span>`;
+    toast(`${nuevos} entrenos importados ✓`, false, true);
+    render();
+  } catch (err) {
+    if (estado) estado.innerHTML = `<span style="color:var(--danger)">Error CSV: ${esc(err.message || err)}</span>`;
+  }
+}
+
+function parsearDuracion(v) {
+  const s = String(v || "").trim();
+  if (!s) return 0;
+  const partes = s.split(":").map(Number);
+  if (partes.length === 3 && !partes.some(isNaN)) return partes[0] * 3600 + partes[1] * 60 + partes[2];
+  if (partes.length === 2 && !partes.some(isNaN)) return partes[0] * 60 + partes[1];
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+
+/* ================= Parser GPX ================= */
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function parseGPXTexto(texto) {
+  const doc = new DOMParser().parseFromString(texto, "application/xml");
+  const pts = Array.from(doc.getElementsByTagName("trkpt"));
+  if (!pts.length) throw new Error("GPX sin puntos (trkpt)");
+  let distancia = 0;
+  let elevGanancia = 0;
+  let prev = null;
+  let prevElev = null;
+  for (const p of pts) {
+    const lat = parseFloat(p.getAttribute("lat"));
+    const lon = parseFloat(p.getAttribute("lon"));
+    if (isNaN(lat) || isNaN(lon)) continue;
+    if (prev) distancia += haversine(prev.lat, prev.lon, lat, lon);
+    const elev = parseFloat(p.getElementsByTagName("ele")[0]?.textContent);
+    if (!isNaN(elev)) {
+      if (prevElev != null && elev > prevElev) elevGanancia += elev - prevElev;
+      prevElev = elev;
+    }
+    prev = { lat, lon };
+  }
+  const t0 = pts[0]?.getElementsByTagName("time")[0]?.textContent;
+  const t1 = pts[pts.length - 1]?.getElementsByTagName("time")[0]?.textContent;
+  let duracionMin = 0;
+  if (t0 && t1) duracionMin = Math.round((new Date(t1) - new Date(t0)) / 60000);
+  return {
+    distanciaKm: Math.round(distancia * 10) / 10,
+    desnivel: Math.round(elevGanancia),
+    duracionMin: Math.max(0, duracionMin),
+  };
+}
+
+async function importarGPX(event) {
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  const estado = $("#importar-estado");
+  try {
+    const contenido = await leerArchivo(file);
+    const g = parseGPXTexto(contenido);
+    if (!g.distanciaKm && !g.desnivel && !g.duracionMin) throw new Error("GPX vacío o inválido");
+    const partes = [
+      g.distanciaKm ? `${g.distanciaKm} km` : "",
+      g.duracionMin ? `${g.duracionMin} min` : "",
+      g.desnivel ? `${g.desnivel} m d+` : "",
+    ].filter(Boolean);
+    const tipo = window._confirmOverride
+      ? window._confirmOverride()
+      : confirm(`GPX: ${partes.join(" · ")}. ¿Importar como BICI? (Cancelar = como TROTE)`);
+
+    const hoy = todayStr();
+    const item = {
+      id: uid(),
+      fecha: hoy,
+      hora: "",
+      tipo: tipo ? "bici-cerro" : "trote",
+      datos: { distancia: String(g.distanciaKm), tiempo: String(g.duracionMin || ""), desnivel: String(g.desnivel || "") },
+      resumen: partes.join(" · "),
+      notas: "Importado de GPX",
+      sync: false,
+    };
+    await DB.add("entrenos", item);
+    App.entrenos.push(item);
+    setPendienteSync();
+    if (estado) estado.innerHTML = `<span style="color:var(--accent)">✓ GPX importado como ${item.tipo === "bici-cerro" ? "bici" : "trote"}: ${partes.join(" · ")}</span>`;
+    toast("GPX importado ✓", false, true);
+    render();
+  } catch (err) {
+    if (estado) estado.innerHTML = `<span style="color:var(--danger)">Error GPX: ${esc(err.message || err)}</span>`;
+  }
+}
+
+/* ================= Parser FIT (binario) ================= */
+const FIT_BASE = {
+  0x00: 1, 0x01: 1, 0x02: 1, 0x83: 2, 0x84: 2, 0x85: 4, 0x86: 4,
+  0x88: 4, 0x89: 8, 0x8a: 1, 0x8b: 2, 0x8c: 4, 0x8d: 1,
+};
+const FIT_INVALIDOS = { 0x00: 0xff, 0x01: 0x7f, 0x02: 0xff, 0x83: 0x7fff, 0x84: 0xffff, 0x85: 0x7fffffff, 0x86: 0xffffffff, 0x88: 0xffffffff, 0x89: NaN, 0x8a: 0xff, 0x8b: 0xffff, 0x8c: 0xffffffff, 0x8d: 0xff };
+
+function parseFITBytes(buf) {
+  const dv = new DataView(buf);
+  const headerSize = dv.getUint8(0);
+  const dataSize = dv.getUint32(4, true);
+  const definiciones = {}; // local mesg num -> { mesg, campos: [{num,size,base}] }
+
+  let offset = headerSize;
+  const end = headerSize + dataSize;
+  const lecturas = { distancia: 0, alturas: [], hr: [], tiempos: [] };
+
+  const leerCampo = (base, size) => {
+    const invalido = FIT_INVALIDOS[base];
+    const valorInvalido = (v) => invalido !== undefined && v === invalido;
+    if (base === 0x86 || base === 0x8c) { const v = dv.getUint32(offset, true); offset += size; return valorInvalido(v) ? null : v; }
+    if (base === 0x85) { const v = dv.getInt32(offset, true); offset += size; return valorInvalido(v) ? null : v; }
+    if (base === 0x84 || base === 0x8b) { const v = dv.getUint16(offset, true); offset += size; return valorInvalido(v) ? null : v; }
+    if (base === 0x83) { const v = dv.getInt16(offset, true); offset += size; return valorInvalido(v) ? null : v; }
+    if (base === 0x02 || base === 0x8a) { const v = dv.getUint8(offset); offset += size; return valorInvalido(v) ? null : v; }
+    if (base === 0x01) { const v = dv.getInt8(offset); offset += size; return valorInvalido(v) ? null : v; }
+    if (base === 0x88) { const v = dv.getFloat32(offset, true); offset += size; return valorInvalido(v) ? null : v; }
+    if (base === 0x89) { const v = dv.getFloat64(offset, true); offset += size; return valorInvalido(v) ? null : v; }
+    offset += size;
+    return null;
+  };
+
+  while (offset < end && offset < buf.byteLength - 1) {
+    const h = dv.getUint8(offset); offset += 1;
+    const isDef = (h & 0x40) !== 0;
+    const isComp = (h & 0x80) !== 0;
+    const localNum = isComp ? (h >> 5) & 0x03 : h & 0x0f;
+    if (isDef) {
+      const reserved = dv.getUint8(offset); offset += 1;
+      const arch = dv.getUint8(offset); offset += 1;
+      const mesg = arch === 1 ? dv.getUint16(offset, false) : dv.getUint16(offset, true);
+      offset += 2;
+      const nCampos = dv.getUint8(offset); offset += 1;
+      const campos = [];
+      for (let i = 0; i < nCampos; i++) {
+        const num = dv.getUint8(offset); offset += 1;
+        const size = dv.getUint8(offset); offset += 1;
+        const base = dv.getUint8(offset); offset += 1;
+        campos.push({ num, size, base });
+      }
+      definiciones[localNum] = { mesg, campos };
+    } else {
+      const def = definiciones[localNum];
+      if (!def) continue;
+      const { mesg, campos } = def;
+      const vals = {};
+      for (const c of campos) {
+        const v = leerCampo(c.base, c.size);
+        if (v != null) vals[c.num] = v;
+      }
+      if (mesg === 20) {
+        if (vals[5] != null) lecturas.distancia = vals[5];
+        if (vals[6] != null) lecturas.alturas.push(vals[6]);
+        if (vals[3] != null) lecturas.hr.push(vals[3]);
+        if (vals[253] != null) lecturas.tiempos.push(vals[253]);
+      }
+    }
+  }
+
+  let desnivel = 0;
+  for (let i = 1; i < lecturas.alturas.length; i++) {
+    const d = lecturas.alturas[i] - lecturas.alturas[i - 1];
+    if (d > 0) desnivel += d;
+  }
+  const hrMedia = lecturas.hr.length ? Math.round(lecturas.hr.reduce((a, b) => a + b, 0) / lecturas.hr.length) : null;
+  const hrMax = lecturas.hr.length ? Math.max(...lecturas.hr) : null;
+  const duracionSeg = lecturas.tiempos.length >= 2 ? lecturas.tiempos[lecturas.tiempos.length - 1] - lecturas.tiempos[0] : 0;
+
+  return {
+    distanciaKm: Math.round(lecturas.distancia / 1000 * 10) / 10,
+    desnivel: Math.round(desnivel),
+    duracionMin: Math.max(0, Math.round(duracionSeg / 60)),
+    hrMedia, hrMax,
+  };
+}
+
+async function importarFIT(event) {
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  const estado = $("#importar-estado");
+  try {
+    const buffer = await leerArchivoBinario(file);
+    const f = parseFITBytes(buffer);
+    if (!f.distanciaKm && !f.desnivel && !f.duracionMin) throw new Error("FIT vacío o no soportado");
+    const partes = [
+      f.distanciaKm ? `${f.distanciaKm} km` : "",
+      f.duracionMin ? `${f.duracionMin} min` : "",
+      f.desnivel ? `${f.desnivel} m d+` : "",
+      f.hrMedia ? `FC ${f.hrMedia}/${f.hrMax}` : "",
+    ].filter(Boolean);
+    const tipo = window._confirmOverride
+      ? window._confirmOverride()
+      : confirm(`FIT: ${partes.join(" · ")}. ¿Importar como BICI? (Cancelar = como TROTE)`);
+
+    const hoy = todayStr();
+    const item = {
+      id: uid(),
+      fecha: hoy,
+      hora: "",
+      tipo: tipo ? "bici-cerro" : "trote",
+      datos: { distancia: String(f.distanciaKm), tiempo: String(f.duracionMin || ""), desnivel: String(f.desnivel || "") },
+      resumen: partes.join(" · "),
+      notas: "Importado de FIT",
+      sync: false,
+    };
+    if (f.hrMedia && f.hrMax) item.datos.fc = `${f.hrMedia} / ${f.hrMax}`;
+    await DB.add("entrenos", item);
+    App.entrenos.push(item);
+    setPendienteSync();
+    if (estado) estado.innerHTML = `<span style="color:var(--accent)">✓ FIT importado: ${partes.join(" · ")}</span>`;
+    toast("FIT importado ✓", false, true);
+    render();
+  } catch (err) {
+    if (estado) estado.innerHTML = `<span style="color:var(--danger)">Error FIT: ${esc(err.message || err)}</span>`;
   }
 }
 
@@ -1132,7 +1463,13 @@ window.estimarFaltantes = estimarFaltantes;
 window.buscarActualizacion = buscarActualizacion;
 window.exportarDatos = exportarDatos;
 window.exportarSemana = exportarSemana;
+window.importarArchivo = importarArchivo;
 window.importarJson = importarJson;
+window.importarGarminCSV = importarGarminCSV;
+window.importarGPX = importarGPX;
+window.importarFIT = importarFIT;
+window.parseGPXTexto = parseGPXTexto;
+window.parseFITBytes = parseFITBytes;
 window.borrarTodo = borrarTodo;
 
 /* ================= Main ================= */
